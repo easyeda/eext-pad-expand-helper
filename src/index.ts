@@ -17,9 +17,15 @@ import { runPadSolderMaskExpansion } from './padSolderMaskExpansion';
 // eslint-disable-next-line unused-imports/no-unused-vars
 export function activate(status?: 'onStartupFinished', arg?: string): void {}
 
-/** 选中焊盘/器件 → 按焊盘外形在顶层/底层阻焊层生成外扩禁止区域外环 */
+/** 配置类型与外扩尺寸 → 连续点选/框选焊盘或器件，按焊盘生成禁止区域或阻焊层填充（折线拟合） */
 export function generatePadSolderMaskExpansion(): void {
-	void runPadSolderMaskExpansion();
+	runPadSolderMaskExpansion().catch((err: unknown) => {
+		const msg = err instanceof Error ? err.message : String(err);
+		eda.sys_Dialog.showConfirmationMessage(
+			eda.sys_I18n.text('SolderMaskExpFailed', undefined, undefined, msg),
+			eda.sys_I18n.text('SolderMaskExpTitle', undefined, undefined),
+		);
+	});
 }
 
 export function about(): void {
