@@ -22,6 +22,9 @@ const ELLIPSE_POLYLINE_SEGMENTS = 48;
 const SELECT_DEBOUNCE_MS = 120;
 /** Toast 自动关闭：`showToastMessage` 第 3 参为秒数，`0` 为不自动关闭（勿误传毫秒） */
 const TOAST_AUTO_CLOSE_SEC = 6;
+/** 开发调试开关：开发排障时设为 true。 */
+const PAD_EXP_DEBUG = true;
+const PAD_EXP_DEBUG_TOAST_INTERVAL_MS = 800;
 
 const MOUSE_LISTENER_ID = `${extensionConfig.uuid}-pad-exp-mouse`;
 
@@ -42,6 +45,8 @@ let pendingInteractiveMouseProps: PcbMouseSelectProp[] | undefined;
 let interactiveKeydownHandler: ((e: Event) => void) | undefined;
 let interactiveContextMenuHandler: ((e: Event) => void) | undefined;
 const recentPadParentIdByPadId = new Map<string, string>();
+const createdSignatureSeen = new Set<string>();
+const processedGenerationKeySeen = new Set<string>();
 
 type GlobalEventTarget = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 
@@ -50,6 +55,96 @@ function getGlobalEventTarget(): GlobalEventTarget | undefined {
 		return globalThis as unknown as GlobalEventTarget;
 	}
 	return undefined;
+}
+
+function padExpDebugLog(message: string, payload?: unknown): void {
+	if (!PAD_EXP_DEBUG) {
+		return;
+	}
+	const writeConsole = (line: string): void => {
+		console.warn(line);
+		console.error(line);
+	};
+	const writeEdaLog = (line: string): void => {
+		try {
+			const logObj = (eda as unknown as { sys_Log?: Record<string, unknown> }).sys_Log;
+			if (!logObj) {
+				return;
+			}
+			// 文档只描述“添加日志条目”，不同宿主版本方法名可能不同，这里做兼容探测。
+			const candidates = ['addLogLine', 'addLog', 'appendLog', 'pushLog', 'log'];
+			for (const key of candidates) {
+				const fn = logObj[key];
+				if (typeof fn === 'function') {
+					try {
+						(fn as (arg0: string) => unknown).call(logObj, line);
+						return;
+					}
+					catch {
+						// 尝试下一种签名
+					}
+					try {
+						(fn as (arg0: ESYS_LogType, arg1: string) => unknown).call(logObj, ESYS_LogType.INFO, line);
+						return;
+					}
+					catch {
+						// 尝试下一种签名
+					}
+				}
+			}
+		}
+		catch {
+			// ignore
+		}
+	};
+	if (payload === undefined) {
+		const line = `[PadExpDebug] ${message}`;
+		writeConsole(line);
+		writeEdaLog(line);
+		return;
+	}
+	let text: string;
+	try {
+		text = JSON.stringify(payload);
+	}
+	catch {
+		text = String(payload);
+	}
+	const line = `[PadExpDebug] ${message}: ${text}`;
+	writeConsole(line);
+	writeEdaLog(line);
+}
+
+let lastDebugToastAt = 0;
+let debugToastSeq = 0;
+function padExpDebugToast(message: string): void {
+	if (!PAD_EXP_DEBUG) {
+		return;
+	}
+	const now = Date.now();
+	if (now - lastDebugToastAt < PAD_EXP_DEBUG_TOAST_INTERVAL_MS) {
+		return;
+	}
+	lastDebugToastAt = now;
+	debugToastSeq += 1;
+	eda.sys_Message.showToastMessage(`[PadExpDebug ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 2);
+}
+
+function padExpDebugToastForce(message: string): void {
+	if (!PAD_EXP_DEBUG) {
+		return;
+	}
+	debugToastSeq += 1;
+	eda.sys_Message.showToastMessage(`[PadExpDebug ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 3);
+}
+
+function showDebugEnabledToast(): void {
+	if (!PAD_EXP_DEBUG) {
+		return;
+	}
+	debugToastSeq = 0;
+	lastDebugToastAt = 0;
+	eda.sys_Message.showToastMessage('[PadExpDebug] Debug logging enabled', ESYS_ToastMessageType.INFO, 3);
 }
 
 /** 吐司：约 20s 自动关闭（timer 为秒）。勿传「关闭」按钮与空回调：空字符串会导致按钮无效。 */
@@ -520,16 +615,194 @@ function normalizeComplexPolygonSource(data: PolyData): PolygonSource[] | undefi
 	if ('getSourceStrictComplex' in complex && typeof complex.getSourceStrictComplex === 'function') {
 		const strict = complex.getSourceStrictComplex();
 		if (Array.isArray(strict) && strict.length > 0) {
-			return strict as PolygonSource[];
+			// 兼容宿主返回：
+			// 1) PolygonSource[]（多轮廓）
+			// 2) PolygonSource（单轮廓，扁平数组）
+			if (Array.isArray(strict[0])) {
+				return strict as PolygonSource[];
+			}
+			return [strict as unknown as PolygonSource];
 		}
 	}
 	if ('getSource' in complex && typeof complex.getSource === 'function') {
 		const src = complex.getSource();
-		if (Array.isArray(src) && src.length > 0 && Array.isArray(src[0])) {
-			return src as PolygonSource[];
+		if (Array.isArray(src) && src.length > 0) {
+			if (Array.isArray(src[0])) {
+				return src as PolygonSource[];
+			}
+			return [src as unknown as PolygonSource];
 		}
 	}
 	return undefined;
+}
+
+function isSinglePolygonSourceData(data: PolyData): boolean {
+	return Array.isArray(data) && data.length > 0 && !Array.isArray(data[0]);
+}
+
+function normalizeSinglePolygonSource(data: PolyData): PolygonSource | undefined {
+	if (!isSinglePolygonSourceData(data)) {
+		return undefined;
+	}
+	return toStrictSingleContourSource(data as unknown as PolygonSource) ?? (data as unknown as PolygonSource);
+}
+
+function getPolygonSourceFirstPoint(source: PolygonSource): { x: number; y: number } | undefined {
+	if (source.length < 2) {
+		return undefined;
+	}
+	if (typeof source[0] === 'number' && typeof source[1] === 'number') {
+		return { x: source[0], y: source[1] };
+	}
+	if (source[0] === 'L' && typeof source[1] === 'number' && typeof source[2] === 'number') {
+		return { x: source[1], y: source[2] };
+	}
+	if (source[0] === 'R' && typeof source[1] === 'number' && typeof source[2] === 'number'
+		&& typeof source[3] === 'number' && typeof source[4] === 'number') {
+		return { x: source[1] + source[3] / 2, y: source[2] - source[4] / 2 };
+	}
+	if (source[0] === 'CIRCLE' && typeof source[1] === 'number' && typeof source[2] === 'number') {
+		return { x: source[1], y: source[2] };
+	}
+	return undefined;
+}
+
+function getPolygonSourceSamplePoints(source: PolygonSource): Array<{ x: number; y: number }> {
+	const pts: Array<{ x: number; y: number }> = [];
+	if (source.length === 0) {
+		return pts;
+	}
+	if (source[0] === 'R'
+		&& typeof source[1] === 'number'
+		&& typeof source[2] === 'number'
+		&& typeof source[3] === 'number'
+		&& typeof source[4] === 'number') {
+		const x = source[1];
+		const y = source[2];
+		const w = source[3];
+		const h = source[4];
+		pts.push({ x, y }, { x: x + w, y }, { x: x + w, y: y - h }, { x, y: y - h });
+		return pts;
+	}
+	if (source[0] === 'CIRCLE'
+		&& typeof source[1] === 'number'
+		&& typeof source[2] === 'number'
+		&& typeof source[3] === 'number') {
+		const cx = source[1];
+		const cy = source[2];
+		const r = source[3];
+		pts.push({ x: cx + r, y: cy }, { x: cx, y: cy + r }, { x: cx - r, y: cy }, { x: cx, y: cy - r });
+		return pts;
+	}
+	let i = source[0] === 'L' ? 1 : 0;
+	while (i + 1 < source.length) {
+		const x = source[i];
+		const y = source[i + 1];
+		if (typeof x === 'number' && typeof y === 'number') {
+			pts.push({ x, y });
+			i += 2;
+			continue;
+		}
+		i += 1;
+	}
+	return pts;
+}
+
+function getPolygonSourceBBox(source: PolygonSource): { minX: number; minY: number; maxX: number; maxY: number } | undefined {
+	const pts = getPolygonSourceSamplePoints(source);
+	if (pts.length === 0) {
+		return undefined;
+	}
+	let minX = pts[0].x;
+	let minY = pts[0].y;
+	let maxX = pts[0].x;
+	let maxY = pts[0].y;
+	for (let i = 1; i < pts.length; i++) {
+		minX = Math.min(minX, pts[i].x);
+		minY = Math.min(minY, pts[i].y);
+		maxX = Math.max(maxX, pts[i].x);
+		maxY = Math.max(maxY, pts[i].y);
+	}
+	return { minX, minY, maxX, maxY };
+}
+
+function scalePolygonSourceAroundCenter(source: PolygonSource, growMil: number): PolygonSource | undefined {
+	if (!(growMil > 0)) {
+		return source;
+	}
+	const strict = toStrictSingleContourSource(source) ?? source;
+	const bbox = getPolygonSourceBBox(strict);
+	if (!bbox) {
+		return undefined;
+	}
+	const w = bbox.maxX - bbox.minX;
+	const h = bbox.maxY - bbox.minY;
+	if (!(w > 1e-9 && h > 1e-9)) {
+		return undefined;
+	}
+	const cx = (bbox.minX + bbox.maxX) / 2;
+	const cy = (bbox.minY + bbox.maxY) / 2;
+	const sx = (w + 2 * growMil) / w;
+	const sy = (h + 2 * growMil) / h;
+	const out: PolygonSource = [];
+	for (let i = 0; i < strict.length; i++) {
+		const tk = strict[i];
+		if (typeof tk === 'string') {
+			if (tk !== 'L') {
+				return undefined;
+			}
+			out.push('L');
+			continue;
+		}
+		const x = tk;
+		const y = strict[i + 1];
+		if (typeof x !== 'number' || typeof y !== 'number') {
+			return undefined;
+		}
+		out.push(cx + (x - cx) * sx, cy + (y - cy) * sy);
+		i += 1;
+	}
+	return out;
+}
+
+async function debugPadPose(pad: PadPrimitive): Promise<void> {
+	if (!PAD_EXP_DEBUG) {
+		return;
+	}
+	const pid = pad.getState_PrimitiveId();
+	const primitiveType = String(pad.getState_PrimitiveType());
+	const padX = pad.getState_X();
+	const padY = pad.getState_Y();
+	const padRot = rotationApiToDeg(pad.getState_Rotation());
+	let parentId: string | undefined;
+	let parentPose: { x?: number; y?: number; rot?: number } | undefined;
+	try {
+		const parentIdInfo = tryCallStringMethod(
+			pad,
+			[
+				'getState_ParentComponentPrimitiveId',
+				'getState_ParentPrimitiveId',
+				'getState_ComponentPrimitiveId',
+				'getState_OwnerPrimitiveId',
+			],
+		);
+		parentId = parentIdInfo.value;
+		if (parentId) {
+			const parent = (await eda.pcb_Primitive.getPrimitivesByPrimitiveId([parentId]))?.[0] as IPCB_PrimitiveComponent | undefined;
+			if (parent) {
+				parentPose = {
+					x: tryCallNumberMethod(parent, ['getState_X']).value,
+					y: tryCallNumberMethod(parent, ['getState_Y']).value,
+					rot: rotationApiToDeg(tryCallNumberMethod(parent, ['getState_Rotation']).value ?? 0),
+				};
+			}
+		}
+	}
+	catch {
+		// ignore debug lookup errors
+	}
+	padExpDebugLog('pad-pose', { pid, primitiveType, padX, padY, padRot, parentId, parentPose });
+	padExpDebugToast(`pad(${pid.slice(0, 6)}): x=${padX.toFixed(1)}, y=${padY.toFixed(1)}, r=${padRot.toFixed(1)}`);
 }
 
 function transformLocalPointToWorld(
@@ -719,27 +992,107 @@ function buildPolygonPadOuterInnerContours(
 	rotDeg: number,
 	expMil: number,
 ): { outer: PolygonSource; inner: PolygonSource } | undefined {
-	const complex = eda.pcb_MathPolygon.createComplexPolygon(data);
-	if (!complex) {
+	// case 1: 单多边形源（TPCB_PolygonSourceArray）
+	let base: PolygonSource | undefined;
+	let complex: IPCB_ComplexPolygon | undefined;
+	if (isSinglePolygonSourceData(data)) {
+		padExpDebugLog('polygon-case=single', { tokenCount: data.length });
+		base = normalizeSinglePolygonSource(data);
+		if (!base) {
+			padExpDebugLog('single-normalize-failed');
+			return undefined;
+		}
+		complex = eda.pcb_MathPolygon.createComplexPolygon(base);
+	}
+	// case 2: 复杂多边形源（Array<TPCB_PolygonSourceArray> / 等价 complex 数据）
+	else {
+		padExpDebugLog('polygon-case=complex');
+		complex = eda.pcb_MathPolygon.createComplexPolygon(data);
+		if (!complex) {
+			padExpDebugLog('complex-create-failed');
+			return undefined;
+		}
+		const contourList = normalizeComplexPolygonSource(data);
+		if (!contourList?.length) {
+			padExpDebugLog('complex-normalize-empty');
+			return undefined;
+		}
+		base = contourList[0];
+		padExpDebugLog('complex-contours', { count: contourList.length });
+	}
+	if (!complex || !base) {
+		padExpDebugLog('polygon-base-or-complex-missing');
 		return undefined;
 	}
-	const contourList = normalizeComplexPolygonSource(data);
-	if (!contourList?.length) {
-		return undefined;
-	}
-	const base = contourList[0];
 	const w = eda.pcb_MathPolygon.calculateWidth(complex);
 	const h = eda.pcb_MathPolygon.calculateHeight(complex);
 	if (!(w > 0 && h > 0)) {
+		padExpDebugLog('polygon-size-invalid', { w, h });
 		return undefined;
 	}
 	const localCenter = complex.getCenter();
+	const baseFirst = getPolygonSourceFirstPoint(base);
+	padExpDebugLog('polygon-base', { baseFirst, localCenter, cx, cy, rotDeg });
+	if (baseFirst) {
+		padExpDebugToast(`base=(${baseFirst.x.toFixed(1)},${baseFirst.y.toFixed(1)}), c=(${cx.toFixed(1)},${cy.toFixed(1)})`);
+	}
 	const scale = Math.max((w + 2 * expMil) / w, (h + 2 * expMil) / h);
-	const outer = transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, scale);
-	const inner = transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, 1);
+	const sourceApproxCenter = (source: PolygonSource): { x: number; y: number } | undefined => {
+		const pts = getPolygonSourceSamplePoints(source);
+		if (pts.length === 0) {
+			return undefined;
+		}
+		const sx = pts.reduce((s, p) => s + p.x, 0);
+		const sy = pts.reduce((s, p) => s + p.y, 0);
+		return { x: sx / pts.length, y: sy / pts.length };
+	};
+	const buildPair = (mode: 'world' | 'local'): { outer?: PolygonSource; inner?: PolygonSource; score: number } => {
+		const outer = mode === 'world'
+			? transformPolygonSourceToWorld(base, localCenter, localCenter.x, localCenter.y, 0, scale)
+			: transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, scale);
+		const inner = mode === 'world'
+			? transformPolygonSourceToWorld(base, localCenter, localCenter.x, localCenter.y, 0, 1)
+			: transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, 1);
+		if (!outer || !inner) {
+			return { score: Number.POSITIVE_INFINITY };
+		}
+		const c = sourceApproxCenter(outer);
+		if (!c) {
+			return { score: Number.POSITIVE_INFINITY };
+		}
+		const score = Math.hypot(c.x - cx, c.y - cy);
+		return { outer, inner, score };
+	};
+	const worldPair = buildPair('world');
+	const localPair = buildPair('local');
+	const picked = worldPair.score <= localPair.score ? { mode: 'world', ...worldPair } : { mode: 'local', ...localPair };
+	padExpDebugLog('polygon-space-select', { worldScore: worldPair.score, localScore: localPair.score, picked: picked.mode });
+	padExpDebugToastForce(`space=${picked.mode}, ws=${worldPair.score.toFixed(1)}, ls=${localPair.score.toFixed(1)}`);
+	const outer = picked.outer;
+	const inner = picked.inner;
 	if (!outer || !inner) {
+		padExpDebugLog('polygon-transform-failed', { hasOuter: Boolean(outer), hasInner: Boolean(inner), scale });
+		padExpDebugToastForce(`transform failed: scale=${scale.toFixed(4)}`);
 		return undefined;
 	}
+	padExpDebugLog('polygon-transform-ok', { scale, outerLen: outer.length, innerLen: inner.length });
+	const ob = getPolygonSourceBBox(outer);
+	const ib = getPolygonSourceBBox(inner);
+	if (ob && ib) {
+		const gx = Math.min(ob.minX - ib.minX, ib.maxX - ob.maxX);
+		const gy = Math.min(ob.minY - ib.minY, ib.maxY - ob.maxY);
+		const minGrow = Math.min(gx, gy);
+		padExpDebugLog('polygon-grow-check', { gx, gy, minGrow, expMil });
+		// 文档定义单多边形会自动闭合；若外扩量明显不足，保形兜底（对原轮廓再做中心缩放补偿）。
+		if (!(minGrow > Math.max(0.1, expMil * 0.3))) {
+			const shapeOuter = scalePolygonSourceAroundCenter(inner, expMil);
+			if (shapeOuter) {
+				padExpDebugToastForce(`grow fallback: shape-scale (${expMil})`);
+				return { outer: shapeOuter, inner };
+			}
+		}
+	}
+	padExpDebugToastForce(`transform ok: scale=${scale.toFixed(4)}, len=${outer.length}/${inner.length}`);
 	return { outer, inner };
 }
 
@@ -928,11 +1281,15 @@ async function buildExpandedMaskPolygon(
 	padShape: PadShape,
 	expMil: number,
 	_useWholePadBBox: boolean,
+	outputKind?: PadExpansionOutputKind,
 ): Promise<FillPolygon | undefined> {
+	await debugPadPose(pad);
 	const worldBBox = await getPadWorldBBox(pad);
 	const cx = pad.getState_X();
 	const cy = pad.getState_Y();
 	const rot = await resolveExpansionRotationDeg(pad, padShape, worldBBox);
+	padExpDebugLog('pad-bbox-and-rot', { cx, cy, rot, worldBBox, shapeType: padShape[0], expMil });
+	padExpDebugToast(`shape=${String(padShape[0])}, rot=${rot.toFixed(2)}, exp=${expMil}`);
 	const e2 = expMil * 2;
 
 	// 圆焊盘：用焊盘中心与 padShape 直径（与 bbox 解耦，避免 bbox 与焊盘不一致时孔洞无效导致 create fill 失败）
@@ -944,6 +1301,12 @@ async function buildExpandedMaskPolygon(
 			const rOuter = rInner + expMil;
 			const outer = circlePolygonSource(ccx, ccy, rOuter);
 			const inner = circlePolygonSource(ccx, ccy, rInner);
+			if (outputKind === 'solder_mask') {
+				const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+				if (outerOnly) {
+					return outerOnly;
+				}
+			}
 			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
 			if (ring) {
 				return ring;
@@ -962,6 +1325,12 @@ async function buildExpandedMaskPolygon(
 		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
 			const outer = stadiumPolygonSource(cx, cy, rot, w0 + e2, h0 + e2);
 			const inner = stadiumPolygonSource(cx, cy, rot, w0, h0);
+			if (outputKind === 'solder_mask') {
+				const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+				if (outerOnly) {
+					return outerOnly;
+				}
+			}
 			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
 			if (ring) {
 				return ring;
@@ -979,6 +1348,12 @@ async function buildExpandedMaskPolygon(
 		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
 			const outer = closedEllipsePolygonSource(cx, cy, (w0 + e2) / 2, (h0 + e2) / 2, rot, ELLIPSE_POLYLINE_SEGMENTS, true);
 			const inner = closedEllipsePolygonSource(cx, cy, w0 / 2, h0 / 2, rot, ELLIPSE_POLYLINE_SEGMENTS, false);
+			if (outputKind === 'solder_mask') {
+				const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+				if (outerOnly) {
+					return outerOnly;
+				}
+			}
 			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
 			if (ring) {
 				return ring;
@@ -997,12 +1372,24 @@ async function buildExpandedMaskPolygon(
 		const innerTl = rectTopLeftFromCenter(cx, cy, w0, h0, rot);
 		const outer: PolygonSource = ['R', outerTl.x, outerTl.y, w0 + e2, h0 + e2, rot, 0];
 		const inner: PolygonSource = ['R', innerTl.x, innerTl.y, w0, h0, rot, 0];
+		if (outputKind === 'solder_mask') {
+			const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+			if (outerOnly) {
+				return outerOnly;
+			}
+		}
 		return tryComplexRing(outer, inner, worldBBox, expMil);
 	}
 
 	if (padShape[0] === PAD_SHAPE_POLYGON) {
 		const contour = buildPolygonPadOuterInnerContours((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
 		if (contour) {
+			if (outputKind === 'solder_mask') {
+				const outerOnly = eda.pcb_MathPolygon.createPolygon(contour.outer);
+				if (outerOnly) {
+					return outerOnly;
+				}
+			}
 			const ring = eda.pcb_MathPolygon.createComplexPolygon([contour.outer, contour.inner]);
 			if (ring) {
 				return ring;
@@ -1017,6 +1404,12 @@ async function buildExpandedMaskPolygon(
 	if (worldBBox) {
 		const outer = bboxToRectContourSource(worldBBox, expMil, true);
 		const inner = bboxToRectContourSource(worldBBox, 0, false);
+		if (outputKind === 'solder_mask') {
+			const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+			if (outerOnly) {
+				return outerOnly;
+			}
+		}
 		return tryComplexRing(outer, inner, worldBBox, expMil);
 	}
 	const source = await buildExpandedMaskSource(pad, padShape, expMil, rot);
@@ -1034,13 +1427,69 @@ async function fillCreate(layer: FillLayer, polygon: IPCB_Polygon | IPCB_Complex
 async function createMaskFill(layer: FillLayer, maskPolygon: FillPolygon): ReturnType<typeof eda.pcb_PrimitiveFill.create> {
 	const tryFill = (poly: IPCB_Polygon | IPCB_ComplexPolygon | PolygonSource[]) =>
 		eda.pcb_PrimitiveFill.create(layer, poly as unknown as IPCB_Polygon, undefined, FILL_SOLID, 0, false);
+	const getSourceSamplePoints = (source: PolygonSource): Array<{ x: number; y: number }> => {
+		const pts: Array<{ x: number; y: number }> = [];
+		if (source.length === 0) {
+			return pts;
+		}
+		if (source[0] === 'R'
+			&& typeof source[1] === 'number'
+			&& typeof source[2] === 'number'
+			&& typeof source[3] === 'number'
+			&& typeof source[4] === 'number') {
+			const x = source[1];
+			const y = source[2];
+			const w = source[3];
+			const h = source[4];
+			pts.push({ x, y }, { x: x + w, y }, { x: x + w, y: y - h }, { x, y: y - h });
+			return pts;
+		}
+		if (source[0] === 'CIRCLE'
+			&& typeof source[1] === 'number'
+			&& typeof source[2] === 'number'
+			&& typeof source[3] === 'number') {
+			const cx = source[1];
+			const cy = source[2];
+			const r = source[3];
+			pts.push({ x: cx + r, y: cy }, { x: cx, y: cy + r }, { x: cx - r, y: cy }, { x: cx, y: cy - r });
+			return pts;
+		}
+		let i = source[0] === 'L' ? 1 : 0;
+		while (i + 1 < source.length) {
+			const x = source[i];
+			const y = source[i + 1];
+			if (typeof x === 'number' && typeof y === 'number') {
+				pts.push({ x, y });
+				i += 2;
+				continue;
+			}
+			i += 1;
+		}
+		return pts;
+	};
+	const estimateSourceAreaAbs = (source: PolygonSource): number => {
+		const pts = getSourceSamplePoints(source);
+		if (pts.length < 3) {
+			return 0;
+		}
+		let area2 = 0;
+		for (let i = 0; i < pts.length; i++) {
+			const a = pts[i];
+			const b = pts[(i + 1) % pts.length];
+			area2 += a.x * b.y - b.x * a.y;
+		}
+		return Math.abs(area2) / 2;
+	};
+	const sortContoursOuterFirst = (contours: PolygonSource[]): PolygonSource[] =>
+		[...contours].sort((a, b) => estimateSourceAreaAbs(b) - estimateSourceAreaAbs(a));
 
 	// 优先尝试「多轮廓源数组」：部分宿主对 IPCB_ComplexPolygon 包装不创建，对双轮廓数组可接受
 	if ('getSourceStrictComplex' in maskPolygon && typeof (maskPolygon as IPCB_ComplexPolygon).getSourceStrictComplex === 'function') {
 		const strict = (maskPolygon as IPCB_ComplexPolygon).getSourceStrictComplex();
 		if (Array.isArray(strict) && strict.length >= 2) {
 			try {
-				const r = await tryFill(strict);
+				const ordered = sortContoursOuterFirst(strict as PolygonSource[]);
+				const r = await tryFill(ordered);
 				if (r) {
 					return r;
 				}
@@ -1054,7 +1503,8 @@ async function createMaskFill(layer: FillLayer, maskPolygon: FillPolygon): Retur
 		const src = maskPolygon.getSource();
 		if (Array.isArray(src) && src.length >= 2 && Array.isArray(src[0])) {
 			try {
-				const r = await tryFill(src as PolygonSource[]);
+				const ordered = sortContoursOuterFirst(src as PolygonSource[]);
+				const r = await tryFill(ordered);
 				if (r) {
 					return r;
 				}
@@ -1072,14 +1522,15 @@ async function createMaskFill(layer: FillLayer, maskPolygon: FillPolygon): Retur
 		if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
 			const src = maskPolygon.getSource();
 			if (Array.isArray(src) && src.length > 0 && Array.isArray(src[0])) {
+				const ordered = sortContoursOuterFirst(src as PolygonSource[]);
 				try {
-					const outer = eda.pcb_MathPolygon.createPolygon(src[0] as PolygonSource);
+					const outer = eda.pcb_MathPolygon.createPolygon(ordered[0] as PolygonSource);
 					if (outer) {
 						return await fillCreate(layer, outer);
 					}
 				}
 				catch {
-					const rectSource = rectContourToRectSource(src[0] as PolygonSource);
+					const rectSource = rectContourToRectSource(ordered[0] as PolygonSource);
 					if (rectSource) {
 						const rect = eda.pcb_MathPolygon.createPolygon(rectSource);
 						if (rect) {
@@ -1091,6 +1542,168 @@ async function createMaskFill(layer: FillLayer, maskPolygon: FillPolygon): Retur
 		}
 		throw new Error('create fill failed');
 	}
+}
+
+function extractLargestContourPolygon(maskPolygon: FillPolygon): IPCB_Polygon | undefined {
+	const getSourceSamplePoints = (source: PolygonSource): Array<{ x: number; y: number }> => {
+		const pts: Array<{ x: number; y: number }> = [];
+		if (source.length === 0) {
+			return pts;
+		}
+		if (source[0] === 'R'
+			&& typeof source[1] === 'number'
+			&& typeof source[2] === 'number'
+			&& typeof source[3] === 'number'
+			&& typeof source[4] === 'number') {
+			const x = source[1];
+			const y = source[2];
+			const w = source[3];
+			const h = source[4];
+			pts.push({ x, y }, { x: x + w, y }, { x: x + w, y: y - h }, { x, y: y - h });
+			return pts;
+		}
+		if (source[0] === 'CIRCLE'
+			&& typeof source[1] === 'number'
+			&& typeof source[2] === 'number'
+			&& typeof source[3] === 'number') {
+			const cx = source[1];
+			const cy = source[2];
+			const r = source[3];
+			pts.push({ x: cx + r, y: cy }, { x: cx, y: cy + r }, { x: cx - r, y: cy }, { x: cx, y: cy - r });
+			return pts;
+		}
+		let i = source[0] === 'L' ? 1 : 0;
+		while (i + 1 < source.length) {
+			const x = source[i];
+			const y = source[i + 1];
+			if (typeof x === 'number' && typeof y === 'number') {
+				pts.push({ x, y });
+				i += 2;
+				continue;
+			}
+			i += 1;
+		}
+		return pts;
+	};
+	const estimateSourceAreaAbs = (source: PolygonSource): number => {
+		const pts = getSourceSamplePoints(source);
+		if (pts.length < 3) {
+			return 0;
+		}
+		let area2 = 0;
+		for (let i = 0; i < pts.length; i++) {
+			const a = pts[i];
+			const b = pts[(i + 1) % pts.length];
+			area2 += a.x * b.y - b.x * a.y;
+		}
+		return Math.abs(area2) / 2;
+	};
+	const pickLargest = (list: PolygonSource[]): PolygonSource | undefined => {
+		if (list.length === 0) {
+			return undefined;
+		}
+		let best = list[0];
+		let bestArea = estimateSourceAreaAbs(best);
+		for (let i = 1; i < list.length; i++) {
+			const a = estimateSourceAreaAbs(list[i]);
+			if (a > bestArea) {
+				bestArea = a;
+				best = list[i];
+			}
+		}
+		return best;
+	};
+	const asComplex = maskPolygon as IPCB_ComplexPolygon;
+	if ('getSourceStrictComplex' in asComplex && typeof asComplex.getSourceStrictComplex === 'function') {
+		const strict = asComplex.getSourceStrictComplex();
+		if (Array.isArray(strict) && strict.length > 0 && Array.isArray(strict[0])) {
+			const largest = pickLargest(strict as PolygonSource[]);
+			if (largest) {
+				return eda.pcb_MathPolygon.createPolygon(largest) ?? undefined;
+			}
+		}
+	}
+	if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
+		const src = maskPolygon.getSource();
+		if (Array.isArray(src) && src.length > 0 && Array.isArray(src[0])) {
+			const largest = pickLargest(src as PolygonSource[]);
+			if (largest) {
+				return eda.pcb_MathPolygon.createPolygon(largest) ?? undefined;
+			}
+		}
+	}
+	return (maskPolygon as IPCB_Polygon);
+}
+
+function normalizePolygonTokenForSignature(token: unknown): string {
+	if (typeof token === 'number') {
+		return Number.isFinite(token) ? token.toFixed(3) : 'NaN';
+	}
+	return String(token);
+}
+
+function buildPolygonSignature(maskPolygon: FillPolygon): string {
+	const asComplex = maskPolygon as IPCB_ComplexPolygon;
+	if ('getSourceStrictComplex' in asComplex && typeof asComplex.getSourceStrictComplex === 'function') {
+		const strict = asComplex.getSourceStrictComplex();
+		if (Array.isArray(strict)) {
+			return strict
+				.map(src => Array.isArray(src)
+					? src.map(normalizePolygonTokenForSignature).join(',')
+					: normalizePolygonTokenForSignature(src))
+				.join('|');
+		}
+	}
+	if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
+		const src = maskPolygon.getSource();
+		if (Array.isArray(src)) {
+			if (src.length > 0 && Array.isArray(src[0])) {
+				return (src as PolygonSource[])
+					.map(s => s.map(normalizePolygonTokenForSignature).join(','))
+					.join('|');
+			}
+			return (src as PolygonSource).map(normalizePolygonTokenForSignature).join(',');
+		}
+	}
+	return '';
+}
+
+function normalizeValueForKey(value: unknown): string {
+	if (typeof value === 'number') {
+		return Number.isFinite(value) ? value.toFixed(6) : 'NaN';
+	}
+	if (Array.isArray(value)) {
+		return `[${value.map(normalizeValueForKey).join(',')}]`;
+	}
+	if (value && typeof value === 'object') {
+		const obj = value as Record<string, unknown>;
+		const keys = Object.keys(obj).sort();
+		return `{${keys.map(k => `${k}:${normalizeValueForKey(obj[k])}`).join(',')}}`;
+	}
+	return String(value);
+}
+
+function buildGenerationUniqueKey(
+	pad: PadPrimitive,
+	shape: PadShape,
+	settings: PadExpansionSettings,
+	smLayer: FillLayer,
+): string {
+	const pid = pad.getState_PrimitiveId();
+	const px = pad.getState_X();
+	const py = pad.getState_Y();
+	const rot = rotationApiToDeg(pad.getState_Rotation());
+	const shapeKey = normalizeValueForKey(shape);
+	return [
+		`pid=${pid}`,
+		`kind=${settings.outputKind}`,
+		`smLayer=${String(smLayer)}`,
+		`exp=${settings.expMil.toFixed(6)}`,
+		`x=${px.toFixed(6)}`,
+		`y=${py.toFixed(6)}`,
+		`rot=${normalizeRotationDeg(rot).toFixed(6)}`,
+		`shape=${shapeKey}`,
+	].join('|');
 }
 
 async function finalizeFillForSettings(
@@ -1196,6 +1809,8 @@ async function processPads(
 	const te = (key: string) => eda.sys_I18n.text(key, undefined, undefined);
 	let created = 0;
 	const errors: string[] = [];
+	const createdSignatureSet = new Set<string>();
+	const generatedKeySet = new Set<string>();
 
 	for (const pad of targetPads) {
 		const layer = pad.getState_Layer();
@@ -1245,26 +1860,60 @@ async function processPads(
 		for (const { shape, layers } of shapesToPlace) {
 			const useWholePadBBox = shapeNeedsWholePadBBox(shape) && !special?.length;
 			for (const smLayer of layers) {
-				const ipcMaskPoly = await buildExpandedMaskPolygon(pad, shape, settings.expMil, useWholePadBBox);
+				const generationKey = buildGenerationUniqueKey(pad, shape, settings, smLayer);
+				if (generatedKeySet.has(generationKey) || processedGenerationKeySeen.has(generationKey)) {
+					continue;
+				}
+				const ipcMaskPoly = await buildExpandedMaskPolygon(pad, shape, settings.expMil, useWholePadBBox, settings.outputKind);
 				if (!ipcMaskPoly) {
+					padExpDebugLog('buildExpandedMaskPolygon-empty', {
+						label,
+						layer: smLayer,
+						shapeType: shape[0],
+						expMil: settings.expMil,
+					});
 					errors.push(`${label}: invalid geometry`);
 					continue;
 				}
+				const signature = `${String(smLayer)}::${buildPolygonSignature(ipcMaskPoly)}`;
+				if (signature !== '' && (createdSignatureSet.has(signature) || createdSignatureSeen.has(signature))) {
+					continue;
+				}
+				const polygonForFill = settings.outputKind === 'solder_mask'
+					? (extractLargestContourPolygon(ipcMaskPoly) ?? ipcMaskPoly)
+					: ipcMaskPoly;
 				let fill: IPCB_PrimitiveFill | undefined;
 				try {
-					fill = await createMaskFill(smLayer, ipcMaskPoly);
+					fill = await createMaskFill(smLayer, polygonForFill);
 				}
 				catch (e) {
+					padExpDebugLog('createMaskFill-error', {
+						label,
+						layer: smLayer,
+						shapeType: shape[0],
+						error: errorMessage(e),
+					});
 					errors.push(`${label}: create fill failed (${errorMessage(e)})`);
 					continue;
 				}
 				if (!fill) {
+					padExpDebugLog('createMaskFill-empty', {
+						label,
+						layer: smLayer,
+						shapeType: shape[0],
+					});
 					errors.push(`${label}: create fill returned empty`);
 					continue;
 				}
 				try {
 					if (await finalizeFillForSettings(fill, settings, layer)) {
 						created++;
+						generatedKeySet.add(generationKey);
+						processedGenerationKeySeen.add(generationKey);
+						if (signature !== '') {
+							createdSignatureSet.add(signature);
+							createdSignatureSeen.add(signature);
+						}
 					}
 					else {
 						errors.push(`${label}: ${te('SolderMaskExpFinalizeRegionFailed')}`);
@@ -1417,6 +2066,8 @@ async function promptExpansionMil(
 export async function runPadSolderMaskExpansion(): Promise<void> {
 	const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 	stopInteractiveMode();
+	showDebugEnabledToast();
+	padExpDebugLog('runPadSolderMaskExpansion-enter');
 	try {
 		if (!(await checkPcbDocumentActive())) {
 			eda.sys_Dialog.showConfirmationMessage(t('SolderMaskExpNeedPcb'), t('SolderMaskExpTitle'));
