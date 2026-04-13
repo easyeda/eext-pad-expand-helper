@@ -23,7 +23,7 @@ const SELECT_DEBOUNCE_MS = 120;
 /** Toast 自动关闭：`showToastMessage` 第 3 参为秒数，`0` 为不自动关闭（勿误传毫秒） */
 const TOAST_AUTO_CLOSE_SEC = 6;
 /** 开发调试开关：开发排障时设为 true。 */
-const PAD_EXP_DEBUG = true;
+const PAD_EXP_DEBUG = false;
 const PAD_EXP_DEBUG_TOAST_INTERVAL_MS = 800;
 
 const MOUSE_LISTENER_ID = `${extensionConfig.uuid}-pad-exp-mouse`;
