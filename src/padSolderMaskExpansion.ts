@@ -21,7 +21,7 @@ const MAX_EXP_MIL = 2000;
 const ELLIPSE_POLYLINE_SEGMENTS = 48;
 const SELECT_DEBOUNCE_MS = 120;
 /** Toast 自动关闭：`showToastMessage` 第 3 参为秒数，`0` 为不自动关闭（勿误传毫秒） */
-const TOAST_AUTO_CLOSE_SEC = 20;
+const TOAST_AUTO_CLOSE_SEC = 6;
 
 const MOUSE_LISTENER_ID = `${extensionConfig.uuid}-pad-exp-mouse`;
 
@@ -484,16 +484,91 @@ async function getPadWorldBBox(pad: PadPrimitive): Promise<{ minX: number; minY:
 	}
 }
 
+/**
+ * 跑道形焊盘外扩用 `getState_Rotation()` 在「仅点选焊盘」时可能不可靠；世界包围盒与长宽 L、W 可反推转角。
+ * 优先用 bbox 长宽比判断横置/纵置：bbox 常因钻孔、描边等略大于标称 L、W，仅靠 |bw−L| 闭合会失败并落入矩阵反解，产生斜向错误角。
+ * 再辅以与 (L,W) 的轴对齐比对；一般角用 |cos|、|sin| 的 AABB 公式反解（θ∈[0,π/2]）。
+ */
+function inferOblongRotationDegFromAabb(
+	w0: number,
+	h0: number,
+	bbox: { minX: number; minY: number; maxX: number; maxY: number },
+	rotApi: number,
+): number {
+	const bw = bbox.maxX - bbox.minX;
+	const bh = bbox.maxY - bbox.minY;
+	const tol = Math.max(0.5, 0.002 * Math.max(w0, h0, bw, bh));
+	const errAt = (deg: number): number => {
+		const rad = (deg * Math.PI) / 180;
+		const pw = Math.abs(w0 * Math.cos(rad)) + Math.abs(h0 * Math.sin(rad));
+		const ph = Math.abs(w0 * Math.sin(rad)) + Math.abs(h0 * Math.cos(rad));
+		return Math.abs(pw - bw) + Math.abs(ph - bh);
+	};
+
+	// 明显拉长的跑道：世界 AABB 哪边更长即长轴朝向，不必与 L、W 数值严格相等（避免横置被误判为斜向）
+	const elong = Math.abs(w0 - h0);
+	const minElong = Math.max(1e-6, 0.02 * Math.max(w0, h0));
+	if (elong > minElong) {
+		const gap = Math.abs(bw - bh);
+		const orientTol = Math.max(tol, 0.03 * Math.max(bw, bh));
+		if (gap > orientTol) {
+			// 轴对齐时直接比较 0° 与 90° 哪个更贴近 bbox，兼容不同库元的宽高基准。
+			return errAt(0) <= errAt(90) ? 0 : 90;
+		}
+	}
+
+	const axisAligned0
+		= errAt(0) < 2 * tol;
+	const axisAligned90
+		= errAt(90) < 2 * tol;
+	if (axisAligned0 && !axisAligned90) {
+		return 0;
+	}
+	if (axisAligned90 && !axisAligned0) {
+		return 90;
+	}
+	if (axisAligned0 && axisAligned90) {
+		const d0 = errAt(0);
+		const d90 = errAt(90);
+		return d0 <= d90 ? 0 : 90;
+	}
+
+	const L = Math.max(w0, h0);
+	const W = Math.min(w0, h0);
+	const det = L * L - W * W;
+	if (Math.abs(det) < 1e-9) {
+		return rotApi;
+	}
+	const c = (L * bw - W * bh) / det;
+	const s = (L * bh - W * bw) / det;
+	const n = Math.hypot(c, s);
+	if (n < 1e-9) {
+		return rotApi;
+	}
+	const cn = c / n;
+	const sn = s / n;
+	if (cn < -0.02 || sn < -0.02) {
+		return rotApi;
+	}
+	const thetaDeg = (Math.atan2(sn, cn) * 180) / Math.PI;
+	const rad = (thetaDeg * Math.PI) / 180;
+	const predW = L * Math.abs(Math.cos(rad)) + W * Math.abs(Math.sin(rad));
+	const predH = L * Math.abs(Math.sin(rad)) + W * Math.abs(Math.cos(rad));
+	if (Math.abs(predW - bw) > tol || Math.abs(predH - bh) > tol) {
+		return rotApi;
+	}
+	return thetaDeg;
+}
+
 async function buildExpandedMaskSource(
 	pad: PadPrimitive,
 	padShape: PadShape,
 	expMil: number,
-	_useWholePadBBox: boolean,
-	_worldBBoxKnownMissing?: boolean,
+	rotationDeg: number,
 ): Promise<PolygonSource | undefined> {
 	const cx = pad.getState_X();
 	const cy = pad.getState_Y();
-	const rot = pad.getState_Rotation();
+	const rot = rotationDeg;
 	if (padShape[0] === PAD_SHAPE_POLYGON) {
 		return expandLocalPolygonPadData((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
 	}
@@ -513,12 +588,20 @@ async function buildExpandedMaskPolygon(
 	pad: PadPrimitive,
 	padShape: PadShape,
 	expMil: number,
-	useWholePadBBox: boolean,
+	_useWholePadBBox: boolean,
 ): Promise<FillPolygon | undefined> {
 	const worldBBox = await getPadWorldBBox(pad);
 	const cx = pad.getState_X();
 	const cy = pad.getState_Y();
-	const rot = pad.getState_Rotation();
+	const rotApi = pad.getState_Rotation();
+	let rot = rotApi;
+	if (worldBBox && padShape[0] === PAD_SHAPE_OVAL) {
+		const w0 = padShape[1];
+		const h0 = padShape[2];
+		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
+			rot = inferOblongRotationDegFromAabb(w0, h0, worldBBox, rotApi);
+		}
+	}
 	const e2 = expMil * 2;
 
 	// 圆焊盘：用焊盘中心与 padShape 直径（与 bbox 解耦，避免 bbox 与焊盘不一致时孔洞无效导致 create fill 失败）
@@ -586,7 +669,7 @@ async function buildExpandedMaskPolygon(
 		const inner = bboxToRectContourSource(worldBBox, 0, false);
 		return tryComplexRing(outer, inner, worldBBox, expMil);
 	}
-	const source = await buildExpandedMaskSource(pad, padShape, expMil, useWholePadBBox, !worldBBox);
+	const source = await buildExpandedMaskSource(pad, padShape, expMil, rot);
 	if (!source) {
 		return undefined;
 	}
