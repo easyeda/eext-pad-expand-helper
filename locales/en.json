@@ -26,5 +26,6 @@
 	"SolderMaskExpNoSolderMaskLayer": "Pad layer does not map to top/bottom solder mask (e.g. inner-layer pad); skipped",
 	"SolderMaskExpNoShapeForSolderMask": "Special pad stack produced no solder-mask side to draw; skipped",
 	"SolderMaskExpFinalizeRegionFailed": "convert to forbidden region failed (solder-mask fill removed if possible)",
+	"SolderMaskExpNoPadsInSelection": "No pads found in current selection (please click on a pad or select a component)",
 	"SolderMaskExpFailed": "Error: ${1}"
 }

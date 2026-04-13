@@ -26,5 +26,6 @@
 	"SolderMaskExpNoSolderMaskLayer": "当前焊盘电气层无法对应顶层/底层阻焊（例如内层焊盘），已跳过",
 	"SolderMaskExpNoShapeForSolderMask": "特殊焊盘分层未产生可绘制的阻焊侧，已跳过",
 	"SolderMaskExpFinalizeRegionFailed": "转为禁止区域失败（已尝试删除阻焊填充）",
+	"SolderMaskExpNoPadsInSelection": "当前选中对象不包含焊盘（请点选焊盘或选中器件）",
 	"SolderMaskExpFailed": "执行失败：${1}"
 }

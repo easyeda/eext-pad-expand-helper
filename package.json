@@ -1,6 +1,6 @@
 {
 	"name": "pad-solder-mask-guard",
-	"version": "1.0.4",
+	"version": "1.0.3",
 	"description": "焊盘外扩助手 - 根据焊盘大小在阻焊层自动生成外扩禁止区域外环的 EDA 扩展",
 	"author": "JLCEDA <support@lceda.cn>",
 	"license": "Apache-2.0",

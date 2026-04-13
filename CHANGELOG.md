@@ -4,11 +4,11 @@
 
 ## 1.0.3
 
-- 交互：菜单打开后先选择生成类型与外扩尺寸，应用后进入连续生成模式（`PCB_Event` 监听选中事件）；再次打开菜单可结束并重新设置。
-- 修复：连续点选无反应——监听 `all` 并过滤 `SELECTED`；`setTimeout(0)` + `props` + `getPrimitivesByPrimitiveId` 回退；应用后自动尝试当前选中。
+- **修复：连续点击模式无效的问题**——将 `EPCB_MouseEventType.SELECTED` 改为字符串 `'selected'` 比较，避免运行时 `ReferenceError: EPCB_MouseEventType is not defined` 错误。
+- 修复：当选中对象不包含焊盘时，显示警告提示（而非静默返回），帮助用户确认选中状态。
+- 修复：TypeScript 类型错误——优化 `isCirclePadShape` 类型守卫，正确处理焊盘形状联合类型。
 - 吐司：`showToastMessage` 的 timer 为**秒**（勿误传毫秒）；约 20 秒自动关闭；成功/警告/错误提示统一时长。
 - 修复：选中器件无生成——`props` 支持嵌套数组；选中列表延迟重试；器件焊盘优先 `getAllPinsByPrimitiveId` 并回退 `toSync().getAllPins()`。
-- 退出连续模式：**Esc**、**鼠标右键**（`contextmenu`），并吐司提示；全局监听在停止模式时移除。
 - 优化：选择类型校验；禁止区域 `convertToRegion` 失败时尝试删除阻焊填充；阻焊模式 `fill.done()`；防重入与补跑队列；内层焊盘/无效特殊焊盘报错；部分成功用警告吐司。
 - 生成类型：禁止区域（默认禁止铺铜 / 可选禁止填充）或阻焊区域（仅阻焊层填充）。
 - 选择：多选焊盘；选中器件对其全部焊盘生效。
