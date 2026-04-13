@@ -41,6 +41,7 @@ let pendingInteractiveMouseProps: PcbMouseSelectProp[] | undefined;
 
 let interactiveKeydownHandler: ((e: Event) => void) | undefined;
 let interactiveContextMenuHandler: ((e: Event) => void) | undefined;
+const recentPadParentIdByPadId = new Map<string, string>();
 
 type GlobalEventTarget = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 
@@ -145,6 +146,21 @@ function normalizeMouseProps(raw: unknown): PcbMouseSelectProp[] | undefined {
 	return undefined;
 }
 
+function rememberPadParentFromMouseProps(mouseProps?: PcbMouseSelectProp[]): void {
+	if (!mouseProps?.length) {
+		return;
+	}
+	for (const p of mouseProps) {
+		if (!p?.primitiveId || !p.parentComponentPrimitiveId) {
+			continue;
+		}
+		if (p.primitiveType !== EPCB_PrimitiveType.PAD && p.primitiveType !== EPCB_PrimitiveType.COMPONENT_PAD) {
+			continue;
+		}
+		recentPadParentIdByPadId.set(p.primitiveId, p.parentComponentPrimitiveId);
+	}
+}
+
 /**
  * 选中列表：先等一帧再读（弹窗关闭后选中状态可能尚未同步）；若仍为空则用事件携带的 primitiveId 拉取图元（部分环境下仅 SELECTED 监听不可靠）。
  */
@@ -190,6 +206,106 @@ function isPadExpansionOutputKind(v: string): v is PadExpansionOutputKind {
 
 function padLabel(pad: PadPrimitive): string {
 	return pad.getState_PadNumber() ?? '?';
+}
+
+function normalizeRotationDeg(deg: number): number {
+	const n = deg % 360;
+	return n < 0 ? n + 360 : n;
+}
+
+function rotationApiToDeg(raw: number): number {
+	// 兼容宿主返回的非常规角度值：
+	// 常规应为度数；若数值异常大（如 3953），实测按 raw * PI / 180 可还原真实度数（约 69°）。
+	if (!Number.isFinite(raw)) {
+		return 0;
+	}
+	if (Math.abs(raw) > 720) {
+		return (raw * Math.PI) / 180;
+	}
+	return raw;
+}
+
+function angleDistanceDeg(a: number, b: number): number {
+	const d = Math.abs(normalizeRotationDeg(a) - normalizeRotationDeg(b));
+	return Math.min(d, 360 - d);
+}
+
+function solveOvalRotationForRMode(
+	w: number,
+	h: number,
+	bbox: { minX: number; minY: number; maxX: number; maxY: number },
+	rawRot: number,
+): number | undefined {
+	const bw = bbox.maxX - bbox.minX;
+	const bh = bbox.maxY - bbox.minY;
+	const L = Math.max(w, h);
+	const W = Math.min(w, h);
+	const d = L - W;
+	if (!(L > 0 && W > 0) || d < 1e-6) {
+		return undefined;
+	}
+	const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+	const c = clamp01((bw - W) / d);
+	const s = clamp01((bh - W) / d);
+	const phi = (Math.atan2(s, c) * 180) / Math.PI; // 主轴与 X 轴夹角（0~90）
+	const majorAngles = [phi, 180 - phi, 180 + phi, 360 - phi];
+	const rCandidates = (h >= w)
+		? majorAngles.map(ma => normalizeRotationDeg(90 - ma))
+		: majorAngles.map(ma => normalizeRotationDeg(ma));
+	let best = rCandidates[0];
+	let bestDist = Number.POSITIVE_INFINITY;
+	for (const c0 of rCandidates) {
+		const dist = angleDistanceDeg(c0, rawRot);
+		if (dist < bestDist) {
+			bestDist = dist;
+			best = c0;
+		}
+	}
+	return best;
+}
+
+function tryCallNumberMethod(target: unknown, methodNames: string[]): { value?: number; method?: string } {
+	if (!target || typeof target !== 'object') {
+		return {};
+	}
+	for (const name of methodNames) {
+		const fn = (target as Record<string, unknown>)[name];
+		if (typeof fn !== 'function') {
+			continue;
+		}
+		try {
+			const v = Number((fn as () => unknown).call(target));
+			if (Number.isFinite(v)) {
+				return { value: v, method: name };
+			}
+		}
+		catch {
+			// ignore
+		}
+	}
+	return {};
+}
+
+function tryCallStringMethod(target: unknown, methodNames: string[]): { value?: string; method?: string } {
+	if (!target || typeof target !== 'object') {
+		return {};
+	}
+	for (const name of methodNames) {
+		const fn = (target as Record<string, unknown>)[name];
+		if (typeof fn !== 'function') {
+			continue;
+		}
+		try {
+			const raw = (fn as () => unknown).call(target);
+			if (typeof raw === 'string' && raw.length > 0) {
+				return { value: raw, method: name };
+			}
+		}
+		catch {
+			// ignore
+		}
+	}
+	return {};
 }
 
 function checkPcbDocumentActive(): Promise<boolean> {
@@ -396,32 +512,330 @@ function closedEllipsePolygonSource(
 	return [flat[0], flat[1], 'L', ...flat.slice(2)] as PolygonSource;
 }
 
-function expandLocalPolygonPadData(
+function normalizeComplexPolygonSource(data: PolyData): PolygonSource[] | undefined {
+	const complex = eda.pcb_MathPolygon.createComplexPolygon(data);
+	if (!complex) {
+		return undefined;
+	}
+	if ('getSourceStrictComplex' in complex && typeof complex.getSourceStrictComplex === 'function') {
+		const strict = complex.getSourceStrictComplex();
+		if (Array.isArray(strict) && strict.length > 0) {
+			return strict as PolygonSource[];
+		}
+	}
+	if ('getSource' in complex && typeof complex.getSource === 'function') {
+		const src = complex.getSource();
+		if (Array.isArray(src) && src.length > 0 && Array.isArray(src[0])) {
+			return src as PolygonSource[];
+		}
+	}
+	return undefined;
+}
+
+function transformLocalPointToWorld(
+	x: number,
+	y: number,
+	localCenter: { x: number; y: number },
+	cx: number,
+	cy: number,
+	rotDeg: number,
+	scale: number,
+): { x: number; y: number } {
+	const lx = (x - localCenter.x) * scale;
+	const ly = (y - localCenter.y) * scale;
+	const rad = (rotDeg * Math.PI) / 180;
+	const cos = Math.cos(rad);
+	const sin = Math.sin(rad);
+	return {
+		x: cx + lx * cos - ly * sin,
+		y: cy + lx * sin + ly * cos,
+	};
+}
+
+function transformPolygonSourceLMode(
+	source: PolygonSource,
+	localCenter: { x: number; y: number },
+	cx: number,
+	cy: number,
+	rotDeg: number,
+	scale: number,
+): PolygonSource | undefined {
+	if (source.length < 4) {
+		return undefined;
+	}
+	// 兼容两种常见格式：
+	// 1) x1 y1 L x2 y2 ...
+	// 2) L x1 y1 x2 y2 ...
+	let startIdx = 0;
+	let withLeadingL = false;
+	if (source[0] === 'L') {
+		withLeadingL = true;
+		startIdx = 1;
+	}
+	else if (source[2] !== 'L') {
+		// 兜底：若全是数值，按点序列处理
+		const allNum = source.every(v => typeof v === 'number');
+		if (!allNum) {
+			return undefined;
+		}
+	}
+	const out: PolygonSource = [];
+	if (withLeadingL) {
+		out.push('L');
+	}
+	let idx = startIdx;
+	let seenModeToken = withLeadingL;
+	while (idx < source.length) {
+		const tk = source[idx];
+		if (typeof tk === 'string') {
+			if (tk !== 'L') {
+				return undefined;
+			}
+			if (!withLeadingL) {
+				out.push('L');
+			}
+			seenModeToken = true;
+			idx++;
+			continue;
+		}
+		const x = source[idx];
+		const y = source[idx + 1];
+		if (typeof x !== 'number' || typeof y !== 'number') {
+			return undefined;
+		}
+		const p = transformLocalPointToWorld(x, y, localCenter, cx, cy, rotDeg, scale);
+		out.push(p.x, p.y);
+		idx += 2;
+	}
+	if (!seenModeToken) {
+		out.splice(2, 0, 'L');
+	}
+	return out.length >= 5 ? out : undefined;
+}
+
+function transformPolygonSourceRectMode(
+	source: PolygonSource,
+	localCenter: { x: number; y: number },
+	cx: number,
+	cy: number,
+	rotDeg: number,
+	scale: number,
+): PolygonSource | undefined {
+	if (
+		source.length !== 7
+		|| source[0] !== 'R'
+		|| typeof source[1] !== 'number'
+		|| typeof source[2] !== 'number'
+		|| typeof source[3] !== 'number'
+		|| typeof source[4] !== 'number'
+		|| typeof source[5] !== 'number'
+		|| typeof source[6] !== 'number'
+	) {
+		return undefined;
+	}
+	const x = source[1];
+	const y = source[2];
+	const w = source[3];
+	const h = source[4];
+	const rot = source[5];
+	const round = source[6];
+	const centerLocal = { x: x + w / 2, y: y - h / 2 };
+	const centerWorld = transformLocalPointToWorld(centerLocal.x, centerLocal.y, localCenter, cx, cy, rotDeg, scale);
+	const wOut = w * scale;
+	const hOut = h * scale;
+	const tl = rectTopLeftFromCenter(centerWorld.x, centerWorld.y, wOut, hOut, rot + rotDeg);
+	return ['R', tl.x, tl.y, wOut, hOut, rot + rotDeg, round * scale] as PolygonSource;
+}
+
+function transformPolygonSourceCircleMode(
+	source: PolygonSource,
+	localCenter: { x: number; y: number },
+	cx: number,
+	cy: number,
+	rotDeg: number,
+	scale: number,
+): PolygonSource | undefined {
+	if (
+		source.length !== 4
+		|| source[0] !== 'CIRCLE'
+		|| typeof source[1] !== 'number'
+		|| typeof source[2] !== 'number'
+		|| typeof source[3] !== 'number'
+	) {
+		return undefined;
+	}
+	const p = transformLocalPointToWorld(source[1], source[2], localCenter, cx, cy, rotDeg, scale);
+	return ['CIRCLE', p.x, p.y, source[3] * scale] as PolygonSource;
+}
+
+function toStrictSingleContourSource(source: PolygonSource): PolygonSource | undefined {
+	const poly = eda.pcb_MathPolygon.createPolygon(source);
+	if (!poly) {
+		return undefined;
+	}
+	if ('getSourceStrict' in poly && typeof (poly as IPCB_Polygon & { getSourceStrict?: () => unknown }).getSourceStrict === 'function') {
+		const strict = (poly as IPCB_Polygon & { getSourceStrict: () => unknown }).getSourceStrict();
+		if (Array.isArray(strict) && strict.length > 0 && !Array.isArray(strict[0])) {
+			return strict as PolygonSource;
+		}
+	}
+	const src = poly.getSource();
+	if (Array.isArray(src) && src.length > 0 && !Array.isArray(src[0])) {
+		return src as PolygonSource;
+	}
+	return undefined;
+}
+
+function transformPolygonSourceToWorld(
+	source: PolygonSource,
+	localCenter: { x: number; y: number },
+	cx: number,
+	cy: number,
+	rotDeg: number,
+	scale: number,
+): PolygonSource | undefined {
+	if (source[0] === 'R') {
+		return transformPolygonSourceRectMode(source, localCenter, cx, cy, rotDeg, scale);
+	}
+	if (source[0] === 'CIRCLE') {
+		return transformPolygonSourceCircleMode(source, localCenter, cx, cy, rotDeg, scale);
+	}
+	const lMode = transformPolygonSourceLMode(source, localCenter, cx, cy, rotDeg, scale);
+	if (lMode) {
+		return lMode;
+	}
+	// 兼容 ARC/CARC/C 等模式：先转严格折线，再做世界坐标变换
+	const strict = toStrictSingleContourSource(source);
+	if (!strict) {
+		return undefined;
+	}
+	return transformPolygonSourceLMode(strict, localCenter, cx, cy, rotDeg, scale);
+}
+
+function buildPolygonPadOuterInnerContours(
 	data: PolyData,
 	cx: number,
 	cy: number,
 	rotDeg: number,
 	expMil: number,
-): PolygonSource | undefined {
+): { outer: PolygonSource; inner: PolygonSource } | undefined {
 	const complex = eda.pcb_MathPolygon.createComplexPolygon(data);
 	if (!complex) {
 		return undefined;
 	}
+	const contourList = normalizeComplexPolygonSource(data);
+	if (!contourList?.length) {
+		return undefined;
+	}
+	const base = contourList[0];
 	const w = eda.pcb_MathPolygon.calculateWidth(complex);
 	const h = eda.pcb_MathPolygon.calculateHeight(complex);
 	if (!(w > 0 && h > 0)) {
 		return undefined;
 	}
-	const lc = complex.getCenter();
+	const localCenter = complex.getCenter();
+	const scale = Math.max((w + 2 * expMil) / w, (h + 2 * expMil) / h);
+	const outer = transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, scale);
+	const inner = transformPolygonSourceToWorld(base, localCenter, cx, cy, rotDeg, 1);
+	if (!outer || !inner) {
+		return undefined;
+	}
+	return { outer, inner };
+}
+
+function selectDimsByBboxFit(
+	w: number,
+	h: number,
+	rotDeg: number,
+	bbox: { minX: number; minY: number; maxX: number; maxY: number },
+): { w: number; h: number } {
+	const bw = bbox.maxX - bbox.minX;
+	const bh = bbox.maxY - bbox.minY;
 	const rad = (rotDeg * Math.PI) / 180;
-	const cos = Math.cos(rad);
-	const sin = Math.sin(rad);
-	const wx = cx + lc.x * cos - lc.y * sin;
-	const wy = cy + lc.x * sin + lc.y * cos;
-	const ew = w + 2 * expMil;
-	const eh = h + 2 * expMil;
-	const tl = rectTopLeftFromCenter(wx, wy, ew, eh, rotDeg);
-	return ['R', tl.x, tl.y, ew, eh, rotDeg, 0];
+	const absCos = Math.abs(Math.cos(rad));
+	const absSin = Math.abs(Math.sin(rad));
+	const err = (dw: number, dh: number): number => {
+		const pw = dw * absCos + dh * absSin;
+		const ph = dw * absSin + dh * absCos;
+		return Math.abs(pw - bw) + Math.abs(ph - bh);
+	};
+	return err(w, h) <= err(h, w) ? { w, h } : { w: h, h: w };
+}
+
+async function resolveExpansionRotationDeg(
+	pad: PadPrimitive,
+	_padShape: PadShape,
+	_worldBBox: { minX: number; minY: number; maxX: number; maxY: number } | undefined,
+): Promise<number> {
+	const padRotRaw = tryCallNumberMethod(
+		pad,
+		[
+			'getState_GlobalRotation',
+			'getState_AbsoluteRotation',
+			'getState_PadRotation',
+			'getState_Rotation',
+			'getState_Angle',
+		],
+	);
+	const padRotApiRaw = padRotRaw.value ?? 0;
+	const padRot = normalizeRotationDeg(rotationApiToDeg(padRotApiRaw));
+	const primitiveType = pad.getState_PrimitiveType();
+	// IPCB_PrimitivePad：直接使用 pad 自身旋转角
+	if (primitiveType === EPCB_PrimitiveType.PAD) {
+		if (_worldBBox && _padShape[0] === PAD_SHAPE_OVAL) {
+			const w = typeof _padShape[1] === 'number' ? _padShape[1] : 0;
+			const h = typeof _padShape[2] === 'number' ? _padShape[2] : 0;
+			if (w > 0 && h > 0) {
+				const solved = solveOvalRotationForRMode(w, h, _worldBBox, padRot);
+				if (solved !== undefined) {
+					return solved;
+				}
+			}
+		}
+		return padRot;
+	}
+
+	// IPCB_PrimitiveComponentPad：严格按 worldRot = padRot + componentRot
+	let compRot: number | undefined;
+	try {
+		const parentIdInfo = tryCallStringMethod(
+			pad,
+			[
+				'getState_ParentComponentPrimitiveId',
+				'getState_ParentPrimitiveId',
+				'getState_ComponentPrimitiveId',
+				'getState_OwnerPrimitiveId',
+			],
+		);
+		const parentId = parentIdInfo.value;
+		const fallbackParentId = recentPadParentIdByPadId.get(pad.getState_PrimitiveId());
+		const finalParentId = parentId || fallbackParentId;
+		if (finalParentId) {
+			const parent = (await eda.pcb_Primitive.getPrimitivesByPrimitiveId([finalParentId]))?.[0] as IPCB_PrimitiveComponent | undefined;
+			const compRotRaw = tryCallNumberMethod(
+				parent,
+				[
+					'getState_GlobalRotation',
+					'getState_AbsoluteRotation',
+					'getState_Rotation',
+					'getState_Angle',
+				],
+			);
+			if (Number.isFinite(compRotRaw.value)) {
+				compRot = rotationApiToDeg(compRotRaw.value ?? 0);
+			}
+		}
+	}
+	catch {
+		// ignore, fallback below
+	}
+
+	if (compRot === undefined || !Number.isFinite(compRot)) {
+		return padRot;
+	}
+
+	const used = normalizeRotationDeg(padRot + compRot);
+	return used;
 }
 
 function expandAnalyticShapeToPolylineSource(
@@ -484,82 +898,6 @@ async function getPadWorldBBox(pad: PadPrimitive): Promise<{ minX: number; minY:
 	}
 }
 
-/**
- * 跑道形焊盘外扩用 `getState_Rotation()` 在「仅点选焊盘」时可能不可靠；世界包围盒与长宽 L、W 可反推转角。
- * 优先用 bbox 长宽比判断横置/纵置：bbox 常因钻孔、描边等略大于标称 L、W，仅靠 |bw−L| 闭合会失败并落入矩阵反解，产生斜向错误角。
- * 再辅以与 (L,W) 的轴对齐比对；一般角用 |cos|、|sin| 的 AABB 公式反解（θ∈[0,π/2]）。
- */
-function inferOblongRotationDegFromAabb(
-	w0: number,
-	h0: number,
-	bbox: { minX: number; minY: number; maxX: number; maxY: number },
-	rotApi: number,
-): number {
-	const bw = bbox.maxX - bbox.minX;
-	const bh = bbox.maxY - bbox.minY;
-	const tol = Math.max(0.5, 0.002 * Math.max(w0, h0, bw, bh));
-	const errAt = (deg: number): number => {
-		const rad = (deg * Math.PI) / 180;
-		const pw = Math.abs(w0 * Math.cos(rad)) + Math.abs(h0 * Math.sin(rad));
-		const ph = Math.abs(w0 * Math.sin(rad)) + Math.abs(h0 * Math.cos(rad));
-		return Math.abs(pw - bw) + Math.abs(ph - bh);
-	};
-
-	// 明显拉长的跑道：世界 AABB 哪边更长即长轴朝向，不必与 L、W 数值严格相等（避免横置被误判为斜向）
-	const elong = Math.abs(w0 - h0);
-	const minElong = Math.max(1e-6, 0.02 * Math.max(w0, h0));
-	if (elong > minElong) {
-		const gap = Math.abs(bw - bh);
-		const orientTol = Math.max(tol, 0.03 * Math.max(bw, bh));
-		if (gap > orientTol) {
-			// 轴对齐时直接比较 0° 与 90° 哪个更贴近 bbox，兼容不同库元的宽高基准。
-			return errAt(0) <= errAt(90) ? 0 : 90;
-		}
-	}
-
-	const axisAligned0
-		= errAt(0) < 2 * tol;
-	const axisAligned90
-		= errAt(90) < 2 * tol;
-	if (axisAligned0 && !axisAligned90) {
-		return 0;
-	}
-	if (axisAligned90 && !axisAligned0) {
-		return 90;
-	}
-	if (axisAligned0 && axisAligned90) {
-		const d0 = errAt(0);
-		const d90 = errAt(90);
-		return d0 <= d90 ? 0 : 90;
-	}
-
-	const L = Math.max(w0, h0);
-	const W = Math.min(w0, h0);
-	const det = L * L - W * W;
-	if (Math.abs(det) < 1e-9) {
-		return rotApi;
-	}
-	const c = (L * bw - W * bh) / det;
-	const s = (L * bh - W * bw) / det;
-	const n = Math.hypot(c, s);
-	if (n < 1e-9) {
-		return rotApi;
-	}
-	const cn = c / n;
-	const sn = s / n;
-	if (cn < -0.02 || sn < -0.02) {
-		return rotApi;
-	}
-	const thetaDeg = (Math.atan2(sn, cn) * 180) / Math.PI;
-	const rad = (thetaDeg * Math.PI) / 180;
-	const predW = L * Math.abs(Math.cos(rad)) + W * Math.abs(Math.sin(rad));
-	const predH = L * Math.abs(Math.sin(rad)) + W * Math.abs(Math.cos(rad));
-	if (Math.abs(predW - bw) > tol || Math.abs(predH - bh) > tol) {
-		return rotApi;
-	}
-	return thetaDeg;
-}
-
 async function buildExpandedMaskSource(
 	pad: PadPrimitive,
 	padShape: PadShape,
@@ -570,7 +908,8 @@ async function buildExpandedMaskSource(
 	const cy = pad.getState_Y();
 	const rot = rotationDeg;
 	if (padShape[0] === PAD_SHAPE_POLYGON) {
-		return expandLocalPolygonPadData((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
+		const contour = buildPolygonPadOuterInnerContours((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
+		return contour?.outer;
 	}
 	return expandAnalyticShapeToPolylineSource(padShape, cx, cy, rot, expMil);
 }
@@ -593,15 +932,7 @@ async function buildExpandedMaskPolygon(
 	const worldBBox = await getPadWorldBBox(pad);
 	const cx = pad.getState_X();
 	const cy = pad.getState_Y();
-	const rotApi = pad.getState_Rotation();
-	let rot = rotApi;
-	if (worldBBox && padShape[0] === PAD_SHAPE_OVAL) {
-		const w0 = padShape[1];
-		const h0 = padShape[2];
-		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
-			rot = inferOblongRotationDegFromAabb(w0, h0, worldBBox, rotApi);
-		}
-	}
+	const rot = await resolveExpansionRotationDeg(pad, padShape, worldBBox);
 	const e2 = expMil * 2;
 
 	// 圆焊盘：用焊盘中心与 padShape 直径（与 bbox 解耦，避免 bbox 与焊盘不一致时孔洞无效导致 create fill 失败）
@@ -625,8 +956,9 @@ async function buildExpandedMaskPolygon(
 	}
 
 	if (worldBBox && padShape[0] === PAD_SHAPE_OVAL) {
-		const w0 = padShape[1];
-		const h0 = padShape[2];
+		const dim = selectDimsByBboxFit(padShape[1], padShape[2], rot, worldBBox);
+		const w0 = dim.w;
+		const h0 = dim.h;
 		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
 			const outer = stadiumPolygonSource(cx, cy, rot, w0 + e2, h0 + e2);
 			const inner = stadiumPolygonSource(cx, cy, rot, w0, h0);
@@ -659,9 +991,27 @@ async function buildExpandedMaskPolygon(
 	}
 
 	if (worldBBox && padShape[0] === PAD_SHAPE_RECT) {
-		const outer = bboxToRectContourSource(worldBBox, expMil, true);
-		const inner = bboxToRectContourSource(worldBBox, 0, false);
+		const w0 = padShape[1];
+		const h0 = padShape[2];
+		const outerTl = rectTopLeftFromCenter(cx, cy, w0 + e2, h0 + e2, rot);
+		const innerTl = rectTopLeftFromCenter(cx, cy, w0, h0, rot);
+		const outer: PolygonSource = ['R', outerTl.x, outerTl.y, w0 + e2, h0 + e2, rot, 0];
+		const inner: PolygonSource = ['R', innerTl.x, innerTl.y, w0, h0, rot, 0];
 		return tryComplexRing(outer, inner, worldBBox, expMil);
+	}
+
+	if (padShape[0] === PAD_SHAPE_POLYGON) {
+		const contour = buildPolygonPadOuterInnerContours((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
+		if (contour) {
+			const ring = eda.pcb_MathPolygon.createComplexPolygon([contour.outer, contour.inner]);
+			if (ring) {
+				return ring;
+			}
+			const outerOnly = eda.pcb_MathPolygon.createPolygon(contour.outer);
+			if (outerOnly) {
+				return outerOnly;
+			}
+		}
 	}
 
 	if (worldBBox) {
@@ -943,6 +1293,7 @@ async function runInteractiveSelectionHandler(mouseProps?: PcbMouseSelectProp[])
 	const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 	interactiveProcessing = true;
 	try {
+		rememberPadParentFromMouseProps(mouseProps);
 		const selected = await resolveSelectedPrimitives(mouseProps);
 		const { pads, errors: collectErrors } = await collectPadsFromSelection(selected);
 		if (pads.length === 0) {
@@ -1025,6 +1376,7 @@ function stopInteractiveMode(): void {
 	interactiveProcessing = false;
 	pendingInteractiveSelection = false;
 	pendingInteractiveMouseProps = undefined;
+	recentPadParentIdByPadId.clear();
 	if (selectionDebounceTimer !== undefined) {
 		clearTimeout(selectionDebounceTimer);
 		selectionDebounceTimer = undefined;
