@@ -18,7 +18,7 @@ const PAD_SHAPE_POLYGON = EPCB_PrimitivePadShapeType.POLYLINE_COMPLEX_POLYGON;
 
 const FILL_SOLID = EPCB_PrimitiveFillMode.SOLID;
 const MAX_EXP_MIL = 2000;
-const CIRCLE_POLYLINE_SEGMENTS = 48;
+const ELLIPSE_POLYLINE_SEGMENTS = 48;
 const SELECT_DEBOUNCE_MS = 120;
 /** Toast 自动关闭：`showToastMessage` 第 3 参为秒数，`0` 为不自动关闭（勿误传毫秒） */
 const TOAST_AUTO_CLOSE_SEC = 20;
@@ -174,6 +174,8 @@ async function resolveSelectedPrimitives(mouseProps?: PcbMouseSelectProp[]): Pro
 
 type PadPrimitive = IPCB_PrimitivePad | IPCB_PrimitiveComponentPad;
 type PadShape = TPCB_PrimitivePadShape;
+/** 解析几何焊盘形状（ELLIPSE/OBLONG/REGULAR_POLYGON/RECTANGLE），不含 POLYGON */
+type AnalyticPadShape = Exclude<PadShape, [EPCB_PrimitivePadShapeType.POLYLINE_COMPLEX_POLYGON, unknown]>;
 type SpecialPad = TPCB_PrimitiveSpecialPadShape;
 type PolygonSource = TPCB_PolygonSourceArray;
 type PolyData = Extract<PadShape, [typeof PAD_SHAPE_POLYGON, unknown]>[1];
@@ -323,7 +325,7 @@ function rectContourToRectSource(source: PolygonSource): PolygonSource | undefin
 	return ['R', minX, maxY, maxX - minX, maxY - minY, 0, 0];
 }
 
-/** 半径 r、顶点数 n 的闭合折线（圆与正多边形共用） */
+/** 半径 r、顶点数 n 的闭合折线（正多边形、椭圆采样等；圆焊盘优先用 {@link circlePolygonSource}） */
 function closedRadialPolyline(cx: number, cy: number, r: number, vertexCount: number, clockwise: boolean): PolygonSource {
 	const n = Math.max(3, Math.floor(vertexCount));
 	const pts: number[] = [];
@@ -333,6 +335,65 @@ function closedRadialPolyline(cx: number, cy: number, r: number, vertexCount: nu
 		pts.push(cx + r * Math.cos(a), cy + r * Math.sin(a));
 	}
 	return [pts[0], pts[1], 'L', ...pts.slice(2)] as PolygonSource;
+}
+
+/** 原生 CIRCLE 多边形源（TPCB_PolygonSourceArray：`CIRCLE cx cy radius`），比 L 折线圆更易通过填充/布尔校验 */
+function circlePolygonSource(cx: number, cy: number, r: number): PolygonSource {
+	return ['CIRCLE', cx, cy, r] as PolygonSource;
+}
+
+/**
+ * `R` 模式首两点为未旋转时的左上角；旋转角作用在左上角锚点上。
+ * Y 向上、中心在 (cx,cy) 时：中心 = 左上 + (w/2, -h/2)，故带旋转时左上角 = 中心 − R(θ)(w/2, -h/2)。
+ * rotDeg=0 时退化为 (cx - w/2, cy + h/2)，与现有矩形焊盘写法一致。
+ */
+function rectTopLeftFromCenter(cx: number, cy: number, w: number, h: number, rotDeg: number): { x: number; y: number } {
+	const rad = (rotDeg * Math.PI) / 180;
+	const cos = Math.cos(rad);
+	const sin = Math.sin(rad);
+	const dx = w / 2;
+	const dy = -h / 2;
+	const rx = dx * cos - dy * sin;
+	const ry = dx * sin + dy * cos;
+	return { x: cx - rx, y: cy - ry };
+}
+
+/**
+ * 跑道形（OBLONG）多边形源：使用官方 `R` 圆角矩形，`round = min(w,h)/2` 时即为胶囊（两端半圆+直边），
+ * 与 L 折线逼近相比更易被 pcb_PrimitiveFill 接受（与圆焊盘用 CIRCLE 同理）。
+ */
+function stadiumPolygonSource(cx: number, cy: number, rotDeg: number, w: number, h: number): PolygonSource {
+	if (Math.abs(w - h) < 1e-6) {
+		return circlePolygonSource(cx, cy, Math.max(w, h) / 2);
+	}
+	const round = Math.min(w, h) / 2;
+	const tl = rectTopLeftFromCenter(cx, cy, w, h, rotDeg);
+	return ['R', tl.x, tl.y, w, h, rotDeg, round] as PolygonSource;
+}
+
+/** 椭圆闭合折线（半轴 rx, ry；均匀外扩近似为半轴各 +exp） */
+function closedEllipsePolygonSource(
+	cx: number,
+	cy: number,
+	rx: number,
+	ry: number,
+	rotDeg: number,
+	segments: number,
+	clockwise: boolean,
+): PolygonSource {
+	const n = Math.max(8, Math.floor(segments));
+	const rad = (rotDeg * Math.PI) / 180;
+	const cosR = Math.cos(rad);
+	const sinR = Math.sin(rad);
+	const flat: number[] = [];
+	for (let i = 0; i < n; i++) {
+		const t = i / n;
+		const a = clockwise ? -t * 2 * Math.PI : t * 2 * Math.PI;
+		const lx = rx * Math.cos(a);
+		const ly = ry * Math.sin(a);
+		flat.push(cx + lx * cosR - ly * sinR, cy + lx * sinR + ly * cosR);
+	}
+	return [flat[0], flat[1], 'L', ...flat.slice(2)] as PolygonSource;
 }
 
 function expandLocalPolygonPadData(
@@ -359,7 +420,8 @@ function expandLocalPolygonPadData(
 	const wy = cy + lc.x * sin + lc.y * cos;
 	const ew = w + 2 * expMil;
 	const eh = h + 2 * expMil;
-	return ['R', wx - ew / 2, wy + eh / 2, ew, eh, rotDeg, 0];
+	const tl = rectTopLeftFromCenter(wx, wy, ew, eh, rotDeg);
+	return ['R', tl.x, tl.y, ew, eh, rotDeg, 0];
 }
 
 function expandAnalyticShapeToPolylineSource(
@@ -374,14 +436,20 @@ function expandAnalyticShapeToPolylineSource(
 		const w = padShape[1] + e2;
 		const h = padShape[2] + e2;
 		if (Math.abs(w - h) < 1e-6) {
-			return closedRadialPolyline(cx, cy, Math.max(w, h) / 2, CIRCLE_POLYLINE_SEGMENTS, true);
+			return circlePolygonSource(cx, cy, Math.max(w, h) / 2);
 		}
-		return ['R', cx - w / 2, cy + h / 2, w, h, rotDeg, 0];
+		return closedEllipsePolygonSource(cx, cy, w / 2, h / 2, rotDeg, ELLIPSE_POLYLINE_SEGMENTS, true);
+	}
+	if (padShape[0] === PAD_SHAPE_OVAL) {
+		const w = padShape[1] + e2;
+		const h = padShape[2] + e2;
+		return stadiumPolygonSource(cx, cy, rotDeg, w, h);
 	}
 	if (padShape[0] === PAD_SHAPE_RECT) {
 		const w = padShape[1] + e2;
 		const h = padShape[2] + e2;
-		return ['R', cx - w / 2, cy + h / 2, w, h, rotDeg, 0];
+		const tl = rectTopLeftFromCenter(cx, cy, w, h, rotDeg);
+		return ['R', tl.x, tl.y, w, h, rotDeg, 0];
 	}
 	if (padShape[0] === PAD_SHAPE_NGON) {
 		const diameter = padShape[1] + e2;
@@ -391,31 +459,20 @@ function expandAnalyticShapeToPolylineSource(
 	return undefined;
 }
 
-function shapeNeedsWholePadBBox(s: PadShape): boolean {
-	return s[0] === PAD_SHAPE_OVAL
-		|| (s[0] === PAD_SHAPE_ELLIPSE && Math.abs(s[1] - s[2]) >= 1e-6);
+/** 已用解析几何处理跑道/椭圆外扩，不再依赖整焊盘 AABB 矩形 */
+function shapeNeedsWholePadBBox(_s: PadShape): boolean {
+	return false;
 }
 
-function isCirclePadShape(shape: PadShape): boolean {
-	return shape[0] === PAD_SHAPE_ELLIPSE && Math.abs(shape[1] - shape[2]) < 1e-6;
-}
-
-function circleInnerFromWorldBBox(bbox: { minX: number; minY: number; maxX: number; maxY: number }): {
-	cx: number;
-	cy: number;
-	rInner: number;
-} | undefined {
-	const w = bbox.maxX - bbox.minX;
-	const h = bbox.maxY - bbox.minY;
-	const rInner = Math.min(w, h) / 2;
-	if (!(rInner > 0)) {
-		return undefined;
+/** 类型守卫：判断是否为圆形焊盘（ELLIPSE 且宽高相等），并收窄 shape 为解析几何类型 */
+function isCirclePadShape(shape: PadShape): shape is AnalyticPadShape {
+	if (shape[0] !== PAD_SHAPE_ELLIPSE) {
+		return false;
 	}
-	return {
-		cx: (bbox.minX + bbox.maxX) / 2,
-		cy: (bbox.minY + bbox.maxY) / 2,
-		rInner,
-	};
+	// 对于 ELLIPSE，shape 是 [type, number, number]
+	const w = shape[1] as number;
+	const h = shape[2] as number;
+	return Math.abs(w - h) < 1e-6;
 }
 
 async function getPadWorldBBox(pad: PadPrimitive): Promise<{ minX: number; minY: number; maxX: number; maxY: number } | undefined> {
@@ -431,24 +488,14 @@ async function buildExpandedMaskSource(
 	pad: PadPrimitive,
 	padShape: PadShape,
 	expMil: number,
-	useWholePadBBox: boolean,
-	worldBBoxKnownMissing?: boolean,
+	_useWholePadBBox: boolean,
+	_worldBBoxKnownMissing?: boolean,
 ): Promise<PolygonSource | undefined> {
-	const worldBBox = worldBBoxKnownMissing ? undefined : await getPadWorldBBox(pad);
-	if (worldBBox) {
-		return bboxToExpandedRectSource(worldBBox, expMil);
-	}
 	const cx = pad.getState_X();
 	const cy = pad.getState_Y();
 	const rot = pad.getState_Rotation();
 	if (padShape[0] === PAD_SHAPE_POLYGON) {
 		return expandLocalPolygonPadData((padShape as [typeof PAD_SHAPE_POLYGON, PolyData])[1], cx, cy, rot, expMil);
-	}
-	if (useWholePadBBox && shapeNeedsWholePadBBox(padShape)) {
-		const bbox = await eda.pcb_Primitive.getPrimitivesBBox([pad.getState_PrimitiveId()]);
-		if (bbox) {
-			return bboxToExpandedRectSource(bbox, expMil);
-		}
 	}
 	return expandAnalyticShapeToPolylineSource(padShape, cx, cy, rot, expMil);
 }
@@ -469,13 +516,20 @@ async function buildExpandedMaskPolygon(
 	useWholePadBBox: boolean,
 ): Promise<FillPolygon | undefined> {
 	const worldBBox = await getPadWorldBBox(pad);
-	if (worldBBox && isCirclePadShape(padShape)) {
-		const g = circleInnerFromWorldBBox(worldBBox);
-		if (g) {
-			const { cx, cy, rInner } = g;
+	const cx = pad.getState_X();
+	const cy = pad.getState_Y();
+	const rot = pad.getState_Rotation();
+	const e2 = expMil * 2;
+
+	// 圆焊盘：用焊盘中心与 padShape 直径（与 bbox 解耦，避免 bbox 与焊盘不一致时孔洞无效导致 create fill 失败）
+	if (isCirclePadShape(padShape)) {
+		const rInner = Math.min(padShape[1], padShape[2]) / 2;
+		if (rInner > 1e-9 && expMil > 1e-9) {
+			const ccx = pad.getState_X();
+			const ccy = pad.getState_Y();
 			const rOuter = rInner + expMil;
-			const outer = closedRadialPolyline(cx, cy, rOuter, CIRCLE_POLYLINE_SEGMENTS, true);
-			const inner = closedRadialPolyline(cx, cy, rInner, CIRCLE_POLYLINE_SEGMENTS, false);
+			const outer = circlePolygonSource(ccx, ccy, rOuter);
+			const inner = circlePolygonSource(ccx, ccy, rInner);
 			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
 			if (ring) {
 				return ring;
@@ -486,6 +540,47 @@ async function buildExpandedMaskPolygon(
 			}
 		}
 	}
+
+	if (worldBBox && padShape[0] === PAD_SHAPE_OVAL) {
+		const w0 = padShape[1];
+		const h0 = padShape[2];
+		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
+			const outer = stadiumPolygonSource(cx, cy, rot, w0 + e2, h0 + e2);
+			const inner = stadiumPolygonSource(cx, cy, rot, w0, h0);
+			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
+			if (ring) {
+				return ring;
+			}
+			const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+			if (outerOnly) {
+				return outerOnly;
+			}
+		}
+	}
+
+	if (worldBBox && padShape[0] === PAD_SHAPE_ELLIPSE && !isCirclePadShape(padShape)) {
+		const w0 = padShape[1];
+		const h0 = padShape[2];
+		if (typeof w0 === 'number' && typeof h0 === 'number' && w0 > 0 && h0 > 0) {
+			const outer = closedEllipsePolygonSource(cx, cy, (w0 + e2) / 2, (h0 + e2) / 2, rot, ELLIPSE_POLYLINE_SEGMENTS, true);
+			const inner = closedEllipsePolygonSource(cx, cy, w0 / 2, h0 / 2, rot, ELLIPSE_POLYLINE_SEGMENTS, false);
+			const ring = eda.pcb_MathPolygon.createComplexPolygon([outer, inner]);
+			if (ring) {
+				return ring;
+			}
+			const outerOnly = eda.pcb_MathPolygon.createPolygon(outer);
+			if (outerOnly) {
+				return outerOnly;
+			}
+		}
+	}
+
+	if (worldBBox && padShape[0] === PAD_SHAPE_RECT) {
+		const outer = bboxToRectContourSource(worldBBox, expMil, true);
+		const inner = bboxToRectContourSource(worldBBox, 0, false);
+		return tryComplexRing(outer, inner, worldBBox, expMil);
+	}
+
 	if (worldBBox) {
 		const outer = bboxToRectContourSource(worldBBox, expMil, true);
 		const inner = bboxToRectContourSource(worldBBox, 0, false);
@@ -498,13 +593,47 @@ async function buildExpandedMaskPolygon(
 	return eda.pcb_MathPolygon.createPolygon(source);
 }
 
-async function fillCreate(layer: FillLayer, polygon: IPCB_Polygon): Promise<IPCB_PrimitiveFill | undefined> {
-	return eda.pcb_PrimitiveFill.create(layer, polygon, undefined, FILL_SOLID, 0, false);
+async function fillCreate(layer: FillLayer, polygon: IPCB_Polygon | IPCB_ComplexPolygon): Promise<IPCB_PrimitiveFill | undefined> {
+	// 宿主 API 第二参名义为 IPCB_Polygon，实际接受复杂多边形或双轮廓源，勿强转为错误形态
+	return eda.pcb_PrimitiveFill.create(layer, polygon as unknown as IPCB_Polygon, undefined, FILL_SOLID, 0, false);
 }
 
 async function createMaskFill(layer: FillLayer, maskPolygon: FillPolygon): ReturnType<typeof eda.pcb_PrimitiveFill.create> {
+	const tryFill = (poly: IPCB_Polygon | IPCB_ComplexPolygon | PolygonSource[]) =>
+		eda.pcb_PrimitiveFill.create(layer, poly as unknown as IPCB_Polygon, undefined, FILL_SOLID, 0, false);
+
+	// 优先尝试「多轮廓源数组」：部分宿主对 IPCB_ComplexPolygon 包装不创建，对双轮廓数组可接受
+	if ('getSourceStrictComplex' in maskPolygon && typeof (maskPolygon as IPCB_ComplexPolygon).getSourceStrictComplex === 'function') {
+		const strict = (maskPolygon as IPCB_ComplexPolygon).getSourceStrictComplex();
+		if (Array.isArray(strict) && strict.length >= 2) {
+			try {
+				const r = await tryFill(strict);
+				if (r) {
+					return r;
+				}
+			}
+			catch {
+				// fall through
+			}
+		}
+	}
+	if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
+		const src = maskPolygon.getSource();
+		if (Array.isArray(src) && src.length >= 2 && Array.isArray(src[0])) {
+			try {
+				const r = await tryFill(src as PolygonSource[]);
+				if (r) {
+					return r;
+				}
+			}
+			catch {
+				// fall through
+			}
+		}
+	}
+
 	try {
-		return await fillCreate(layer, maskPolygon as IPCB_Polygon);
+		return await fillCreate(layer, maskPolygon as IPCB_ComplexPolygon);
 	}
 	catch {
 		if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
@@ -734,6 +863,10 @@ async function runInteractiveSelectionHandler(mouseProps?: PcbMouseSelectProp[])
 		const selected = await resolveSelectedPrimitives(mouseProps);
 		const { pads, errors: collectErrors } = await collectPadsFromSelection(selected);
 		if (pads.length === 0) {
+			// 已选中对象但未找到焊盘时提示用户
+			if (selected.length > 0) {
+				showPadExpToast(t('SolderMaskExpNoPadsInSelection'), ESYS_ToastMessageType.WARNING, t);
+			}
 			return;
 		}
 		const { created, errors } = await processPads(pads, settings);
@@ -787,8 +920,9 @@ function registerInteractiveMouseListener(t: (k: string, ...a: string[]) => stri
 		MOUSE_LISTENER_ID,
 		'all',
 		(eventType, props) => {
-			const isSelected = eventType === EPCB_MouseEventType.SELECTED
-				|| String(eventType) === 'selected';
+			// 使用字符串比较，避免 EPCB_MouseEventType 运行时未定义
+			const et = String(eventType).toLowerCase();
+			const isSelected = et === 'selected';
 			if (!isSelected || !activeInteractiveSettings) {
 				return;
 			}
