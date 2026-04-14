@@ -1,11 +1,409 @@
 <!doctype html>
+<!--
+  内联框架页：须放在扩展 /iframe/ 目录；由 eda.sys_IFrame.openIFrame 加载。
+  说明：https://prodocs.lceda.cn/cn/api/guide/inline-frame.html
+  API：https://prodocs.lceda.cn/cn/api/reference/pro-api.sys_iframe.openiframe.html
+-->
 <html lang="zh-Hans">
 	<head>
-		<title>Inner Frame</title>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!-- 文档：对话框标题可来自 <title>；宿主亦支持 openIFrame 的 props.title -->
+		<title data-i18n="setupTitle">焊盘外扩设置</title>
+		<style>
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				padding: 14px 16px 16px;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+				font-size: 13px;
+				line-height: 1.45;
+				color: #1a1a1a;
+				background: #f6f7f9;
+			}
+			h1 {
+				margin: 0 0 10px;
+				font-size: 15px;
+				font-weight: 600;
+			}
+			.hint {
+				margin: 0 0 12px;
+				color: #555;
+				font-size: 12px;
+			}
+			fieldset {
+				margin: 0 0 12px;
+				padding: 10px 12px;
+				border: 1px solid #d8dce3;
+				border-radius: 8px;
+				background: #fff;
+			}
+			legend {
+				padding: 0 6px;
+				font-weight: 600;
+				font-size: 12px;
+			}
+			.radio-row {
+				display: flex;
+				align-items: flex-start;
+				gap: 8px;
+				margin-bottom: 8px;
+			}
+			.radio-row:last-child {
+				margin-bottom: 0;
+			}
+			.radio-row input {
+				margin-top: 2px;
+			}
+			.radio-row label {
+				flex: 1;
+				cursor: pointer;
+			}
+			.row {
+				margin-bottom: 10px;
+			}
+			.row:last-child {
+				margin-bottom: 0;
+			}
+			label.field {
+				display: block;
+				font-weight: 600;
+				margin-bottom: 4px;
+				font-size: 12px;
+			}
+			input[type='text'],
+			input[type='number'] {
+				width: 100%;
+				padding: 7px 10px;
+				border: 1px solid #c5cad3;
+				border-radius: 6px;
+				font-size: 13px;
+			}
+			.subhint {
+				margin-top: 4px;
+				font-size: 11px;
+				color: #666;
+			}
+			.check-row {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+			}
+			.check-row input {
+				width: auto;
+			}
+			.check-row label {
+				cursor: pointer;
+				font-weight: normal;
+			}
+			.actions {
+				display: flex;
+				justify-content: flex-end;
+				gap: 10px;
+				margin-top: 14px;
+			}
+			button {
+				padding: 8px 18px;
+				border-radius: 6px;
+				font-size: 13px;
+				cursor: pointer;
+				border: 1px solid #c5cad3;
+				background: #fff;
+			}
+			button.primary {
+				background: #2563eb;
+				border-color: #1d4ed8;
+				color: #fff;
+			}
+			button:hover {
+				opacity: 0.92;
+			}
+		</style>
 	</head>
 	<body>
-		<p>这是一个示例 IFrame 页面</p>
+		<h1 data-i18n="setupHeading">焊盘外扩设置</h1>
+		<p class="hint" data-i18n="setupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
+
+		<fieldset>
+			<legend data-i18n="legendKind">生成类型</legend>
+			<div class="radio-row">
+				<input type="radio" name="kind" id="k_pour" value="forbidden_pour" checked />
+				<label for="k_pour" data-i18n="kindForbiddenPour">禁止区域（禁止铺铜，默认）</label>
+			</div>
+			<div class="radio-row">
+				<input type="radio" name="kind" id="k_fill" value="forbidden_fill" />
+				<label for="k_fill" data-i18n="kindForbiddenFill">禁止区域（禁止填充）</label>
+			</div>
+			<div class="radio-row">
+				<input type="radio" name="kind" id="k_sm" value="solder_mask" />
+				<label for="k_sm" data-i18n="kindSolderMask">阻焊区域（仅阻焊层图形）</label>
+			</div>
+		</fieldset>
+
+		<fieldset>
+			<legend data-i18n="legendWidth">外扩宽度</legend>
+			<div class="row">
+				<label class="field" for="expansion" data-i18n="labelWidth">单边外扩（相对焊盘外形）</label>
+				<input type="text" id="expansion" inputmode="decimal" autocomplete="off" />
+				<div class="subhint" id="widthUnitHint"></div>
+				<div class="subhint" data-i18n="widthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
+			</div>
+		</fieldset>
+
+		<fieldset>
+			<legend data-i18n="legendMode">生成模式</legend>
+			<div class="check-row">
+				<input type="checkbox" id="continuous" />
+				<label for="continuous" data-i18n="labelContinuous">启用连续生成模式（在画布上持续点选/框选）</label>
+			</div>
+		</fieldset>
+
+		<div class="actions">
+			<button type="button" id="btnCancel" data-i18n="btnCancel">取消</button>
+			<button type="button" id="btnOk" class="primary" data-i18n="btnOk">生成</button>
+		</div>
+
+		<script>
+			(function () {
+				var STORAGE_KEY = 'pad-solder-mask-guard:iframe-setup';
+				var IFRAME_ID = 'pad-sm-guard-setup';
+				var MAX_MIL = 2000;
+
+				var translations = {
+					'zh-Hans': {
+						setupTitle: '焊盘外扩设置',
+						setupHeading: '焊盘外扩设置',
+						setupKindHint: '禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。',
+						legendKind: '生成类型',
+						kindForbiddenPour: '禁止区域（禁止铺铜，默认）',
+						kindForbiddenFill: '禁止区域（禁止填充）',
+						kindSolderMask: '阻焊区域（仅阻焊层图形）',
+						legendWidth: '外扩宽度',
+						labelWidth: '单边外扩（相对焊盘外形）',
+						widthSubhint: '数值将换算为 PCB 内部 mil 后生成几何。',
+						widthUnitSuffix: '当前单位：',
+						legendMode: '生成模式',
+						labelContinuous: '启用连续生成模式（在画布上持续点选/框选）',
+						btnCancel: '取消',
+						btnOk: '生成',
+						errInvalid: '请输入有效的外扩数值。',
+						errPositive: '请输入大于 0 的外扩值。',
+						errLarge: '输入过大，请输入小于等于 2000 mil 的值。',
+					},
+					en: {
+						setupTitle: 'Pad expansion',
+						setupHeading: 'Pad expansion',
+						setupKindHint:
+							'Forbidden regions become copper-layer region rules; solder-mask output keeps fills on solder-mask layers only.',
+						legendKind: 'Output type',
+						kindForbiddenPour: 'Forbidden region (no copper pour, default)',
+						kindForbiddenFill: 'Forbidden region (no fills)',
+						kindSolderMask: 'Solder mask only (fills on solder-mask layers)',
+						legendWidth: 'Expansion',
+						labelWidth: 'Single-side offset from pad outline',
+						widthSubhint: 'Values are converted to PCB mils before geometry.',
+						widthUnitSuffix: 'Unit: ',
+						legendMode: 'Mode',
+						labelContinuous: 'Continuous mode (click / box-select on canvas)',
+						btnCancel: 'Cancel',
+						btnOk: 'Generate',
+						errInvalid: 'Enter a valid number.',
+						errPositive: 'Enter a value greater than 0.',
+						errLarge: 'Value too large (max 2000 mil).',
+					},
+				};
+
+				function resolveLang(callback) {
+					var fallback = 'zh-Hans';
+					try {
+						if (typeof eda !== 'undefined' && eda.sys_I18n && typeof eda.sys_I18n.getCurrentLanguage === 'function') {
+							var r = eda.sys_I18n.getCurrentLanguage();
+							if (r && typeof r.then === 'function') {
+								r.then(function (l) {
+									callback(l || fallback);
+								}).catch(function () {
+									callback(fallback);
+								});
+								return;
+							}
+							callback(r || fallback);
+							return;
+						}
+					} catch (e) {}
+					callback(fallback);
+				}
+
+				function applyI18n(lang) {
+					var dict = translations[lang] || translations['zh-Hans'];
+					document.querySelectorAll('[data-i18n]').forEach(function (el) {
+						var k = el.getAttribute('data-i18n');
+						if (k && dict[k]) {
+							el.textContent = dict[k];
+						}
+					});
+					if (dict.setupTitle) {
+						document.title = dict.setupTitle;
+					}
+					return dict;
+				}
+
+				function convertToMil(raw, unit) {
+					var n = parseFloat(String(raw).trim().replace(/,/g, ''));
+					if (!isFinite(n) || n < 0) {
+						return null;
+					}
+					var u = unit || 'mm';
+					var sys = eda.sys_Unit;
+					if (u === 'mm') {
+						return sys.mmToMil(n, 6);
+					}
+					if (u === 'mil') {
+						return n;
+					}
+					if (u === 'inch' || u === 'in') {
+						return sys.inchToMil(n, 6);
+					}
+					if (u === 'cm') {
+						return sys.mmToMil(n * 10, 6);
+					}
+					if (u === 'dm') {
+						return sys.mmToMil(n * 100, 6);
+					}
+					if (u === 'm') {
+						return sys.mmToMil(n * 1000, 6);
+					}
+					return sys.mmToMil(n, 6);
+				}
+
+				function validateExpansion(dict) {
+					var raw = document.getElementById('expansion').value;
+					var unit = window.__padExpUnit;
+					var mil = convertToMil(raw, unit);
+					if (mil === null) {
+						alert(dict.errInvalid);
+						return false;
+					}
+					if (mil <= 0) {
+						alert(dict.errPositive);
+						return false;
+					}
+					if (mil > MAX_MIL) {
+						alert(dict.errLarge);
+						return false;
+					}
+					return true;
+				}
+
+				function writeResultSync(payload) {
+					var s = JSON.stringify(payload);
+					try {
+						sessionStorage.setItem(STORAGE_KEY, s);
+					} catch (e) {}
+				}
+
+				function writeResultAsync(payload) {
+					var s = JSON.stringify(payload);
+					writeResultSync(payload);
+					if (typeof eda === 'undefined' || !eda.sys_Storage || typeof eda.sys_Storage.setExtensionUserConfig !== 'function') {
+						return Promise.resolve(false);
+					}
+					return eda.sys_Storage.setExtensionUserConfig(STORAGE_KEY, s).catch(function () {
+						return false;
+					});
+				}
+
+				function closeFrameAsync() {
+					if (typeof eda === 'undefined' || !eda.sys_IFrame || typeof eda.sys_IFrame.closeIFrame !== 'function') {
+						return Promise.resolve(false);
+					}
+					var p = eda.sys_IFrame.closeIFrame(IFRAME_ID);
+					function normalizeCloseResult(r) {
+						// 部分宿主 Promise 解析为 undefined，仍视为已发起关闭
+						if (r === undefined || r === null) {
+							return true;
+						}
+						return r;
+					}
+					if (p && typeof p.then === 'function') {
+						return p.then(normalizeCloseResult).catch(function () {
+							return false;
+						});
+					}
+					return Promise.resolve(normalizeCloseResult(p));
+				}
+
+				/** 仅用于 iframe 内异常提示（成功路径不刷屏） */
+				function toastIframeError(msg) {
+					try {
+						if (typeof eda !== 'undefined' && eda.sys_Message && typeof eda.sys_Message.showToastMessage === 'function') {
+							var info = typeof ESYS_ToastMessageType !== 'undefined' ? ESYS_ToastMessageType.INFO : 0;
+							eda.sys_Message.showToastMessage('[PadExp·iframe] ' + msg, info, 6);
+						}
+					} catch (e) {}
+				}
+
+				function onCancel() {
+					writeResultAsync({ cancelled: true }).finally(function () {
+						closeFrameAsync();
+					});
+				}
+
+				function onOk() {
+					var dict = translations[window.__padExpLang || 'zh-Hans'] || translations['zh-Hans'];
+					if (!validateExpansion(dict)) {
+						return;
+					}
+					var kind = (document.querySelector('input[name="kind"]:checked') || {}).value || 'forbidden_pour';
+					var expansionInput = document.getElementById('expansion').value.trim();
+					var continuous = document.getElementById('continuous').checked;
+					var payload = {
+						cancelled: false,
+						kind: kind,
+						expansionInput: expansionInput,
+						continuous: continuous,
+					};
+					document.getElementById('btnOk').disabled = true;
+					document.getElementById('btnCancel').disabled = true;
+					writeResultAsync(payload)
+						.then(function () {
+							return closeFrameAsync();
+						})
+						.catch(function (err) {
+							toastIframeError('写入/关闭失败: ' + String(err && err.message ? err.message : err));
+							document.getElementById('btnOk').disabled = false;
+							document.getElementById('btnCancel').disabled = false;
+						});
+				}
+
+				function boot() {
+					resolveLang(function (lang) {
+						window.__padExpLang = lang || 'zh-Hans';
+						applyI18n(window.__padExpLang);
+						finishBoot(window.__padExpLang);
+					});
+				}
+
+				function finishBoot(lang) {
+					eda.sys_Unit.getFrontendDataUnit().then(function (unit) {
+						window.__padExpUnit = unit;
+						var u = unit || 'mm';
+						var map = { mm: 'mm', mil: 'mil', inch: 'inch', in: 'in', cm: 'cm', dm: 'dm', m: 'm' };
+						var label = map[u] || String(u);
+						var dict = translations[lang] || translations['zh-Hans'];
+						document.getElementById('widthUnitHint').textContent = dict.widthUnitSuffix + label;
+					});
+					document.getElementById('btnCancel').addEventListener('click', onCancel);
+					document.getElementById('btnOk').addEventListener('click', onOk);
+				}
+
+				if (document.readyState === 'loading') {
+					document.addEventListener('DOMContentLoaded', boot);
+				} else {
+					boot();
+				}
+			})();
+		</script>
 	</body>
 </html>

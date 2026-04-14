@@ -18,6 +18,19 @@ const PAD_SHAPE_POLYGON = EPCB_PrimitivePadShapeType.POLYLINE_COMPLEX_POLYGON;
 
 const FILL_SOLID = EPCB_PrimitiveFillMode.SOLID;
 const MAX_EXP_MIL = 2000;
+/** 与 iframe/index.html 中 IFRAME_ID、sessionStorage 键保持一致；多窗口须唯一 id，见内联框架说明 */
+const IFRAME_SETUP_ID = 'pad-sm-guard-setup';
+const IFRAME_SETUP_STORAGE_KEY = 'pad-solder-mask-guard:iframe-setup';
+/** 与文档一致：URI 自扩展根起，可用 `iframe/...` 或 `/iframe/...` */
+const IFRAME_HTML_PATH_PRIMARY = 'iframe/index.html';
+const IFRAME_HTML_PATH_ALT = '/iframe/index.html';
+const IFRAME_CLOSE_POLL_MS = 50;
+const IFRAME_WAIT_MAX_MS = 600_000;
+/**
+ * 内联设置页详细吐司（openIFrame / 存储 / 解析）。默认关；排障时改 true。
+ * 内联 API 为 BETA，见：https://prodocs.lceda.cn/cn/api/reference/pro-api.sys_iframe.openiframe.html
+ */
+const PAD_IFRAME_SETUP_VERBOSE = false;
 const ELLIPSE_POLYLINE_SEGMENTS = 48;
 const SELECT_DEBOUNCE_MS = 120;
 /** Toast 自动关闭：`showToastMessage` 第 3 参为秒数，`0` 为不自动关闭（勿误传毫秒） */
@@ -136,6 +149,65 @@ function padExpDebugToastForce(message: string): void {
 	}
 	debugToastSeq += 1;
 	eda.sys_Message.showToastMessage(`[PadExpDebug ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 3);
+}
+
+function sleepMs(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** 内联设置流程专用：与 PAD_EXP_DEBUG 独立，便于宿主环境排障。 */
+function toastIframeSetupVerbose(message: string): void {
+	if (!PAD_IFRAME_SETUP_VERBOSE) {
+		return;
+	}
+	const text = `[PadExp·Setup] ${message}`;
+	eda.sys_Message.showToastMessage(text.length > 900 ? `${text.slice(0, 897)}…` : text, ESYS_ToastMessageType.INFO, 8);
+}
+
+function clearIframeSetupPayload(): void {
+	try {
+		if (typeof sessionStorage !== 'undefined') {
+			sessionStorage.removeItem(IFRAME_SETUP_STORAGE_KEY);
+		}
+	}
+	catch {
+		// ignore
+	}
+	try {
+		eda.sys_Storage.deleteExtensionUserConfig(IFRAME_SETUP_STORAGE_KEY);
+	}
+	catch {
+		// ignore
+	}
+}
+
+/**
+ * iframe 与扩展主逻辑可能分属不同 JS 上下文，sessionStorage 不一定共享；
+ * 优先读扩展用户配置（与 iframe 内双写对齐）。
+ */
+function readIframeSetupPayloadRaw(): string | null {
+	try {
+		const v = eda.sys_Storage.getExtensionUserConfig(IFRAME_SETUP_STORAGE_KEY);
+		if (v !== undefined && v !== null) {
+			if (typeof v === 'string') {
+				return v.length > 0 ? v : null;
+			}
+			return JSON.stringify(v);
+		}
+	}
+	catch {
+		// ignore
+	}
+	try {
+		if (typeof sessionStorage !== 'undefined') {
+			const s = sessionStorage.getItem(IFRAME_SETUP_STORAGE_KEY);
+			return s !== null && s !== '' ? s : null;
+		}
+	}
+	catch {
+		// ignore
+	}
+	return null;
 }
 
 function showDebugEnabledToast(): void {
@@ -2063,6 +2135,284 @@ async function promptExpansionMil(
 	}
 }
 
+async function waitForIframeClosed(sysIframe: { isIFrameAlreadyExist: (id: string) => Promise<boolean> }): Promise<void> {
+	const start = Date.now();
+	let loop = 0;
+	let everExisted = false;
+	for (;;) {
+		const exists = await sysIframe.isIFrameAlreadyExist(IFRAME_SETUP_ID);
+		if (exists) {
+			everExisted = true;
+		}
+		// 若曾经存在且现在不存在，说明窗口已关闭
+		if (everExisted && !exists) {
+			toastIframeSetupVerbose('检测到窗口已关闭 (从存在变为不存在)');
+			return;
+		}
+		// 兜底：若存储中已有有效结果（非取消），也认为已处理完毕，避免宿主检测异常导致卡死
+		const raw = readIframeSetupPayloadRaw();
+		if (raw) {
+			try {
+				const p = JSON.parse(raw) as Record<string, unknown>;
+				if (p && p.cancelled !== true && p.kind) {
+					toastIframeSetupVerbose('存储中已有有效结果，提前结束等待');
+					return;
+				}
+				if (p && p.cancelled === true) {
+					toastIframeSetupVerbose('存储中为取消标记，结束等待');
+					return;
+				}
+			}
+			catch {
+				// ignore
+			}
+		}
+		if (Date.now() - start > IFRAME_WAIT_MAX_MS) {
+			toastIframeSetupVerbose('等待窗口关闭超时（10分钟），强制继续');
+			return;
+		}
+		if (loop % 20 === 0) {
+			toastIframeSetupVerbose(`等待关闭中... loop=${loop} everExisted=${String(everExisted)} exists=${String(exists)}`);
+		}
+		loop++;
+		await new Promise<void>(resolve => setTimeout(resolve, IFRAME_CLOSE_POLL_MS));
+	}
+}
+
+interface PadExpansionSetupResult {
+	outputKind: PadExpansionOutputKind;
+	expMil: number;
+	continuous: boolean;
+}
+
+async function parseIframeSetupFromStorage(t: (k: string, ...a: string[]) => string, silent = false): Promise<PadExpansionSetupResult | undefined> {
+	const raw = readIframeSetupPayloadRaw();
+	if (raw === null || raw === '') {
+		toastIframeSetupVerbose('解析：未读到 payload（extensionStorage 与 sessionStorage 均为空）');
+		if (!silent) {
+			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpSetupReadEmpty'), t('SolderMaskExpTitle'));
+		}
+		return undefined;
+	}
+	toastIframeSetupVerbose(`解析：已读 payload 长度=${raw.length}`);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw) as unknown;
+	}
+	catch (e) {
+		toastIframeSetupVerbose(`JSON 解析失败: ${errorMessage(e)}`);
+		return undefined;
+	}
+	if (!parsed || typeof parsed !== 'object') {
+		toastIframeSetupVerbose('解析：JSON 解析结果不是对象');
+		return undefined;
+	}
+	const p = parsed as Record<string, unknown>;
+	if (p.cancelled === true) {
+		toastIframeSetupVerbose('解析：cancelled=true，退出');
+		return undefined;
+	}
+	const kindRaw = p.kind;
+	if (typeof kindRaw !== 'string' || !isPadExpansionOutputKind(kindRaw)) {
+		toastIframeSetupVerbose(`解析：kind 无效 kindRaw=${String(kindRaw)}`);
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpInvalidKind'), t('SolderMaskExpTitle'));
+		return undefined;
+	}
+	const unit = await eda.sys_Unit.getFrontendDataUnit();
+	const expMil = convertInputToMil(String(p.expansionInput ?? ''), unit);
+	if (expMil === null) {
+		toastIframeSetupVerbose(`解析：expansionInput 转换失败 input=${String(p.expansionInput)} unit=${unit}`);
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpInvalidNumber'), t('SolderMaskExpTitle'));
+		return undefined;
+	}
+	if (expMil <= 0) {
+		toastIframeSetupVerbose(`解析：expMil <= 0 (${expMil})`);
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpNeedPositive'), t('SolderMaskExpTitle'));
+		return undefined;
+	}
+	if (expMil > MAX_EXP_MIL) {
+		toastIframeSetupVerbose(`解析：expMil 过大 (${expMil})`);
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpTooLarge', String(MAX_EXP_MIL)), t('SolderMaskExpTitle'));
+		return undefined;
+	}
+	toastIframeSetupVerbose(`解析成功: kind=${kindRaw} expMil=${expMil.toFixed(4)} continuous=${String(p.continuous)}`);
+	return {
+		outputKind: kindRaw,
+		expMil,
+		continuous: Boolean(p.continuous),
+	};
+}
+
+/**
+ * 内联设置页（`/iframe/` 目录 + {@link eda.sys_IFrame.openIFrame}）。
+ * @see https://prodocs.lceda.cn/cn/api/guide/inline-frame.html
+ * @see https://prodocs.lceda.cn/cn/api/reference/pro-api.sys_iframe.openiframe.html
+ */
+async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
+	const sysIframe = eda.sys_IFrame;
+	if (!sysIframe || typeof sysIframe.openIFrame !== 'function') {
+		toastIframeSetupVerbose('sys_IFrame.openIFrame 不可用，走回退对话框');
+		return padExpansionSetupFallbackAsync(t);
+	}
+	clearIframeSetupPayload();
+	const iframeProps = {
+		title: t('SolderMaskExpSetupTitle'),
+		grayscaleMask: true,
+		minimizeButton: false,
+		maximizeButton: false,
+		buttonCallbackFn: async (button: 'close' | 'minimize' | 'maximize') => {
+			if (button === 'close') {
+				try {
+					const cur = readIframeSetupPayloadRaw();
+					if (cur === null || cur === '') {
+						try {
+							sessionStorage.setItem(IFRAME_SETUP_STORAGE_KEY, JSON.stringify({ cancelled: true }));
+						}
+						catch {
+							// ignore
+						}
+						try {
+							await eda.sys_Storage.setExtensionUserConfig(
+								IFRAME_SETUP_STORAGE_KEY,
+								JSON.stringify({ cancelled: true }),
+							);
+						}
+						catch {
+							// ignore
+						}
+					}
+				}
+				catch {
+					// ignore
+				}
+			}
+		},
+	};
+	let opened: boolean | undefined;
+	try {
+		opened = await sysIframe.openIFrame(
+			IFRAME_HTML_PATH_PRIMARY,
+			420,
+			460,
+			IFRAME_SETUP_ID,
+			iframeProps,
+		) as boolean | undefined;
+	}
+	catch (e) {
+		padExpDebugLog('openIFrame-primary-throw', e);
+		try {
+			opened = await sysIframe.openIFrame(
+				IFRAME_HTML_PATH_ALT,
+				420,
+				460,
+				IFRAME_SETUP_ID,
+				iframeProps,
+			) as boolean | undefined;
+		}
+		catch (e2) {
+			padExpDebugLog('openIFrame-alt-throw', e2);
+			toastIframeSetupVerbose(`openIFrame 异常: ${errorMessage(e2)}`);
+			return padExpansionSetupFallbackAsync(t);
+		}
+	}
+	// 文档为 Promise<boolean>；部分宿主返回 undefined，勿用 Boolean(opened) 误判
+	toastIframeSetupVerbose(`openIFrame 返回 opened=${String(opened)}`);
+	// 无论 openIFrame 返回什么，都等待一下再检测；某些宿主返回 undefined 但窗口已打开
+	await sleepMs(200);
+	let exists = await sysIframe.isIFrameAlreadyExist(IFRAME_SETUP_ID);
+	toastIframeSetupVerbose(`首次检测 isIFrameAlreadyExist => ${String(exists)}`);
+	// 若不存在，再给予几次重试（某些宿主初始化有延迟）
+	for (let retry = 0; !exists && retry < 5; retry++) {
+		await sleepMs(200);
+		exists = await sysIframe.isIFrameAlreadyExist(IFRAME_SETUP_ID);
+		toastIframeSetupVerbose(`重试${retry + 1} isIFrameAlreadyExist => ${String(exists)}`);
+	}
+	// 放宽判断：宿主常见行为是 openIFrame 返回 undefined（非 false）、isIFrameAlreadyExist 恒为 false。
+	// 若用 Boolean(opened)，undefined 会被当成 false，导致误判「未打开」并在用户尚未操作时就 return，后续生成永远进不了主逻辑。
+	// 仅当明确返回 false 且探测不到窗口时，才视为打开失败。
+	const windowLikelyOpen = opened !== false || exists;
+	if (!windowLikelyOpen) {
+		toastIframeSetupVerbose('openIFrame 返回 false 且 isIFrameAlreadyExist=false，判定为打开失败');
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpIframeOpenFailed'), t('SolderMaskExpTitle'));
+		return undefined;
+	}
+	if (!exists) {
+		toastIframeSetupVerbose('警告：isIFrameAlreadyExist 始终为 false，但继续等待关闭（以存储内容为准）');
+	}
+	await waitForIframeClosed(sysIframe);
+	toastIframeSetupVerbose('内联窗口已关闭，开始读取设置');
+	// 给予几次重试读取，避免 iframe 写入与主逻辑读取的竞态
+	let setup: PadExpansionSetupResult | undefined;
+	for (let readAttempt = 0; readAttempt < 10; readAttempt++) {
+		setup = await parseIframeSetupFromStorage(t, readAttempt < 9);
+		if (setup !== undefined) {
+			break;
+		}
+		toastIframeSetupVerbose(`读取设置为空，重试 ${readAttempt + 1}/10...`);
+		await sleepMs(150);
+	}
+	if (setup === undefined) {
+		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpSetupReadEmpty'), t('SolderMaskExpTitle'));
+	}
+	return setup;
+}
+
+async function padExpansionSetupFallbackAsync(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
+	const kind = await showSelectKindAsync(t);
+	if (kind === undefined) {
+		return undefined;
+	}
+	const unit = await eda.sys_Unit.getFrontendDataUnit();
+	const expMil = await promptExpansionMil(unit, unitHint(unit), t);
+	if (expMil === undefined) {
+		return undefined;
+	}
+	const continuous = await showConfirmationAsync(
+		t('SolderMaskExpContinuousModePrompt'),
+		t('SolderMaskExpTitle'),
+		t('SolderMaskExpContinuousYes'),
+		t('SolderMaskExpContinuousNo'),
+	);
+	return { outputKind: kind, expMil, continuous };
+}
+
+async function runOneShotPadExpansion(
+	t: (k: string, ...a: string[]) => string,
+	settings: PadExpansionSettings,
+): Promise<void> {
+	await new Promise<void>(resolve => setTimeout(resolve, 0));
+	let selected = await resolveSelectedPrimitives();
+	if (selected.length === 0) {
+		await new Promise<void>(resolve => setTimeout(resolve, 120));
+		selected = await eda.pcb_SelectControl.getAllSelectedPrimitives();
+	}
+	const { pads, errors: collectErrors } = await collectPadsFromSelection(selected);
+	if (pads.length === 0) {
+		if (selected.length === 0) {
+			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpOneShotNeedSelect'), t('SolderMaskExpTitle'));
+		}
+		else {
+			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpNoPadsInSelection'), t('SolderMaskExpTitle'));
+		}
+		return;
+	}
+	const { created, errors } = await processPads(pads, settings);
+	const allErr = [...collectErrors, ...errors];
+	const errTail = allErr.length
+		? `\n${t('SolderMaskExpErrors')}\n${allErr.slice(0, 5).join('\n')}${allErr.length > 5 ? '\n…' : ''}`
+		: '';
+	const toastType = allErr.length === 0
+		? ESYS_ToastMessageType.SUCCESS
+		: created === 0
+			? ESYS_ToastMessageType.ERROR
+			: ESYS_ToastMessageType.WARNING;
+	showPadExpToast(
+		t('SolderMaskExpInteractiveToast', String(created), String(pads.length)) + errTail,
+		toastType,
+		t,
+	);
+}
+
 export async function runPadSolderMaskExpansion(): Promise<void> {
 	const t = (key: string, ...args: string[]) => eda.sys_I18n.text(key, undefined, undefined, ...args);
 	stopInteractiveMode();
@@ -2073,25 +2423,21 @@ export async function runPadSolderMaskExpansion(): Promise<void> {
 			eda.sys_Dialog.showConfirmationMessage(t('SolderMaskExpNeedPcb'), t('SolderMaskExpTitle'));
 			return;
 		}
-		const kind = await showSelectKindAsync(t);
-		if (kind === undefined) {
+		const setup = await openPadExpansionSetupIframe(t);
+		if (setup === undefined) {
 			return;
 		}
-		const unit = await eda.sys_Unit.getFrontendDataUnit();
-		const expMil = await promptExpansionMil(unit, unitHint(unit), t);
-		if (expMil === undefined) {
-			return;
+		toastIframeSetupVerbose(
+			`设置已应用: kind=${setup.outputKind} expMil=${setup.expMil.toFixed(4)} continuous=${String(setup.continuous)}`,
+		);
+		const settings: PadExpansionSettings = { outputKind: setup.outputKind, expMil: setup.expMil };
+		if (setup.continuous) {
+			activeInteractiveSettings = settings;
+			registerInteractiveMouseListener(t);
 		}
-		if (!(await showConfirmationAsync(
-			t('SolderMaskExpApplyInteractiveBefore', unitHint(unit)),
-			t('SolderMaskExpTitle'),
-			t('SolderMaskExpApplyInteractiveMain'),
-			t('SolderMaskExpApplyInteractiveCancel'),
-		))) {
-			return;
+		else {
+			await runOneShotPadExpansion(t, settings);
 		}
-		activeInteractiveSettings = { outputKind: kind, expMil };
-		registerInteractiveMouseListener(t);
 	}
 	catch (err) {
 		eda.sys_Dialog.showConfirmationMessage(
