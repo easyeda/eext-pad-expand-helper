@@ -6,10 +6,9 @@
 	"SolderMaskExpContinuousModePrompt": "是否启用连续生成模式？\n「确定」为连续点选/框选；「取消」为仅对当前选中生成一次。",
 	"SolderMaskExpContinuousYes": "连续生成",
 	"SolderMaskExpContinuousNo": "仅本次",
-	"SolderMaskExpOneShotNeedSelect": "请先在 PCB 中选中焊盘或器件，再运行本功能（单次生成）。",
 	"SolderMaskExpIframeOpenFailed": "无法打开设置窗口，请稍后重试或更新嘉立创 EDA。",
 	"SolderMaskExpInvalidKind": "无效的生成类型。",
-	"SolderMaskExpNeedPcb": "请在 PCB 编辑器中打开电路板后再运行本功能。",
+	"SolderMaskExpNeedPcb": "请在 PCB 或封装编辑器中打开文档后再运行本功能。",
 	"SolderMaskExpSelectKindBefore": "选择生成类型：",
 	"SolderMaskExpSelectKindAfter": "禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。",
 	"SolderMaskExpKindForbiddenPour": "禁止区域（禁止铺铜，默认）",
@@ -33,6 +32,5 @@
 	"SolderMaskExpNoSolderMaskLayer": "当前焊盘电气层无法对应顶层/底层阻焊（例如内层焊盘），已跳过",
 	"SolderMaskExpNoShapeForSolderMask": "特殊焊盘分层未产生可绘制的阻焊侧，已跳过",
 	"SolderMaskExpFinalizeRegionFailed": "转为禁止区域失败（已尝试删除阻焊填充）",
-	"SolderMaskExpNoPadsInSelection": "当前选中对象不包含焊盘（请点选焊盘或选中器件）",
 	"SolderMaskExpFailed": "执行失败：${1}"
 }

@@ -27,6 +27,8 @@ const IFRAME_SESSION_POLL_MS = 120;
 /** 与文档一致：URI 自扩展根起，可用 `iframe/...` 或 `/iframe/...` */
 const IFRAME_HTML_PATH_PRIMARY = 'iframe/index.html';
 const IFRAME_HTML_PATH_ALT = '/iframe/index.html';
+/** 内联设置窗高度（px）。须与 `iframe/index.html` 实际内容高度接近；过大则底部大块留白，过小易出纵向滚动条。 */
+const IFRAME_SETUP_HEIGHT_PX = 575;
 const IFRAME_WAIT_MAX_MS = 600_000;
 /**
  * 内联设置页详细吐司（openIFrame / 存储 / 解析）。默认关；排障时改 true。
@@ -499,7 +501,10 @@ function tryCallStringMethod(target: unknown, methodNames: string[]): { value?: 
 
 function checkPcbDocumentActive(): Promise<boolean> {
 	return eda.dmt_SelectControl.getCurrentDocumentInfo()
-		.then(doc => doc?.documentType === EDMT_EditorDocumentType.PCB)
+		.then((doc) => {
+			const t = doc?.documentType;
+			return t === EDMT_EditorDocumentType.PCB || t === EDMT_EditorDocumentType.FOOTPRINT;
+		})
 		.catch(() => false);
 }
 
@@ -548,6 +553,10 @@ function unitHint(unit: Awaited<ReturnType<typeof eda.sys_Unit.getFrontendDataUn
 	const u = unit ?? 'mm';
 	const map: Record<string, string> = { mm: 'mm', mil: 'mil', inch: 'inch', in: 'in', cm: 'cm', dm: 'dm', m: 'm' };
 	return map[u as string] ?? String(u);
+}
+
+function defaultExpansionInputByUnit(unit: Awaited<ReturnType<typeof eda.sys_Unit.getFrontendDataUnit>>): string {
+	return unit === 'mm' ? '0.1' : '10';
 }
 
 function rangeCoversOuterLayer(startLayer: number, endLayer: number, outer: number): boolean {
@@ -1800,9 +1809,22 @@ async function finalizeFillForSettings(
 	return true;
 }
 
-function showInputDialogAsync(before: string, after: string, title: string): Promise<string | undefined> {
+function showInputDialogAsync(
+	before: string,
+	after: string,
+	title: string,
+	defaultInput: string,
+): Promise<string | undefined> {
 	return new Promise((resolve) => {
-		eda.sys_Dialog.showInputDialog(before, after, title, 'number', '10', { placeholder: '10', step: 0.000_001 }, resolve);
+		eda.sys_Dialog.showInputDialog(
+			before,
+			after,
+			title,
+			'number',
+			defaultInput,
+			{ placeholder: defaultInput, step: 0.000_001 },
+			resolve,
+		);
 	});
 }
 
@@ -1998,10 +2020,6 @@ async function runInteractiveSelectionHandler(mouseProps?: PcbMouseSelectProp[])
 		const selected = await resolveSelectedPrimitives(mouseProps);
 		const { pads, errors: collectErrors } = await collectPadsFromSelection(selected);
 		if (pads.length === 0) {
-			// 已选中对象但未找到焊盘时提示用户
-			if (selected.length > 0) {
-				showPadExpToast(t('SolderMaskExpNoPadsInSelection'), ESYS_ToastMessageType.WARNING, t);
-			}
 			return;
 		}
 		const { created, errors } = await processPads(pads, settings);
@@ -2097,11 +2115,13 @@ async function promptExpansionMil(
 	hint: string,
 	t: (k: string, ...a: string[]) => string,
 ): Promise<number | undefined> {
+	const defaultInput = defaultExpansionInputByUnit(unit);
 	for (;;) {
 		const input = await showInputDialogAsync(
 			t('SolderMaskExpInputBefore', hint),
 			t('SolderMaskExpInputAfter', String(MAX_EXP_MIL)),
 			t('SolderMaskExpInputTitle'),
+			defaultInput,
 		);
 		if (input === undefined) {
 			return undefined;
@@ -2338,7 +2358,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 		opened = await sysIframe.openIFrame(
 			IFRAME_HTML_PATH_PRIMARY,
 			420,
-			620,
+			IFRAME_SETUP_HEIGHT_PX,
 			IFRAME_SETUP_ID,
 			iframeProps,
 		) as boolean | undefined;
@@ -2349,7 +2369,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 			opened = await sysIframe.openIFrame(
 				IFRAME_HTML_PATH_ALT,
 				420,
-				620,
+				IFRAME_SETUP_HEIGHT_PX,
 				IFRAME_SETUP_ID,
 				iframeProps,
 			) as boolean | undefined;
@@ -2419,12 +2439,6 @@ async function runOneShotPadExpansion(
 	}
 	const { pads, errors: collectErrors } = await collectPadsFromSelection(selected);
 	if (pads.length === 0) {
-		if (selected.length === 0) {
-			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpOneShotNeedSelect'), t('SolderMaskExpTitle'));
-		}
-		else {
-			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpNoPadsInSelection'), t('SolderMaskExpTitle'));
-		}
 		return;
 	}
 	const { created, errors } = await processPads(pads, settings);

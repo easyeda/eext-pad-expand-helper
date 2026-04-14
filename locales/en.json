@@ -6,10 +6,9 @@
 	"SolderMaskExpContinuousModePrompt": "Enable continuous generation?\nOK: keep clicking/box-selecting on the PCB. Cancel: generate once for the current selection only.",
 	"SolderMaskExpContinuousYes": "Continuous",
 	"SolderMaskExpContinuousNo": "Once only",
-	"SolderMaskExpOneShotNeedSelect": "Select at least one pad or component on the PCB before running (single-shot mode).",
 	"SolderMaskExpIframeOpenFailed": "Could not open the setup window. Please retry or update JLCEDA.",
 	"SolderMaskExpInvalidKind": "Invalid output type.",
-	"SolderMaskExpNeedPcb": "Open a PCB document before running this command.",
+	"SolderMaskExpNeedPcb": "Open a PCB or footprint document before running this command.",
 	"SolderMaskExpSelectKindBefore": "Choose output type:",
 	"SolderMaskExpSelectKindAfter": "Forbidden regions become copper-layer region rules; solder-mask only keeps fills on solder-mask layers.",
 	"SolderMaskExpKindForbiddenPour": "Forbidden region (no copper pour, default)",
@@ -33,6 +32,5 @@
 	"SolderMaskExpNoSolderMaskLayer": "Pad layer does not map to top/bottom solder mask (e.g. inner-layer pad); skipped",
 	"SolderMaskExpNoShapeForSolderMask": "Special pad stack produced no solder-mask side to draw; skipped",
 	"SolderMaskExpFinalizeRegionFailed": "convert to forbidden region failed (solder-mask fill removed if possible)",
-	"SolderMaskExpNoPadsInSelection": "No pads found in current selection (please click on a pad or select a component)",
 	"SolderMaskExpFailed": "Error: ${1}"
 }

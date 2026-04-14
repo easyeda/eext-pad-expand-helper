@@ -51,7 +51,7 @@
 				pointer-events: none;
 			}
 			.wrap {
-				padding: 12px 14px 14px;
+				padding: 12px 14px 0;
 				max-width: 440px;
 				margin: 0 auto;
 			}
@@ -200,14 +200,16 @@
 				line-height: 1.45;
 				color: var(--text);
 			}
+			footer.action-bar {
+				margin: 10px 0 0;
+				padding: 10px 0 0;
+				border-top: 1px solid var(--border);
+			}
 			.action-bar {
 				display: flex;
 				justify-content: flex-end;
 				align-items: center;
 				gap: 10px;
-				margin-top: 12px;
-				padding-top: 12px;
-				border-top: 1px solid var(--border);
 			}
 			button {
 				padding: 9px 20px;
@@ -401,6 +403,10 @@
 						document.title = dict.setupTitle;
 					}
 					return dict;
+				}
+
+				function defaultExpansionInputByUnit(unit) {
+					return unit === 'mm' ? '0.1' : '10';
 				}
 
 				function convertToMil(raw, unit) {
@@ -651,6 +657,7 @@
 						var label = map[u] || String(u);
 						var dict = translations[lang] || translations['zh-Hans'];
 						document.getElementById('widthUnitHint').textContent = dict.widthUnitSuffix + label;
+						document.getElementById('expansion').value = defaultExpansionInputByUnit(u);
 					});
 					document.getElementById('btnCancel').addEventListener('click', onCancel);
 					document.getElementById('btnOk').addEventListener('click', onPrimaryClick);

@@ -86,6 +86,24 @@
 					}
 				]
 			}
+		],
+		"footprint": [
+			{
+				"id": "SolderMaskTools",
+				"title": "pad-expand-helper",
+				"menuItems": [
+					{
+						"id": "PadSolderMaskExpansion",
+						"title": "pad-expand-helper: expand...",
+						"registerFn": "generatePadSolderMaskExpansion"
+					},
+					{
+						"id": "About",
+						"title": "About...",
+						"registerFn": "about"
+					}
+				]
+			}
 		]
 	}
 }
