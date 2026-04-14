@@ -20,11 +20,13 @@ const FILL_SOLID = EPCB_PrimitiveFillMode.SOLID;
 const MAX_EXP_MIL = 2000;
 /** 与 iframe/index.html 中 IFRAME_ID、sessionStorage 键保持一致；多窗口须唯一 id，见内联框架说明 */
 const IFRAME_SETUP_ID = 'pad-sm-guard-setup';
-const IFRAME_SETUP_STORAGE_KEY = 'pad-solder-mask-guard:iframe-setup';
+const IFRAME_SETUP_STORAGE_KEY = 'pad-expand-helper:iframe-setup';
+/** 与 iframe 同步：宿主是否处于连续点选监听（Esc/停止后回写 false，iframe 轮询复位「停止生成」按钮） */
+const IFRAME_LISTENING_ECHO_KEY = 'pad-expand-helper:listening-echo';
+const IFRAME_SESSION_POLL_MS = 120;
 /** 与文档一致：URI 自扩展根起，可用 `iframe/...` 或 `/iframe/...` */
 const IFRAME_HTML_PATH_PRIMARY = 'iframe/index.html';
 const IFRAME_HTML_PATH_ALT = '/iframe/index.html';
-const IFRAME_CLOSE_POLL_MS = 50;
 const IFRAME_WAIT_MAX_MS = 600_000;
 /**
  * 内联设置页详细吐司（openIFrame / 存储 / 解析）。默认关；排障时改 true。
@@ -58,8 +60,10 @@ let pendingInteractiveMouseProps: PcbMouseSelectProp[] | undefined;
 let interactiveKeydownHandler: ((e: Event) => void) | undefined;
 let interactiveContextMenuHandler: ((e: Event) => void) | undefined;
 const recentPadParentIdByPadId = new Map<string, string>();
-const createdSignatureSeen = new Set<string>();
-const processedGenerationKeySeen = new Set<string>();
+/** 内联会话内是否已注册 PCB 鼠标监听（连续模式重复「生成」仅更新参数时不重复注册） */
+let padExpIframeListeningRegistered = false;
+/** 当前内联会话内已连续模式提示吐司是否已出现过一次（避免停止后再生成重复刷屏） */
+let padExpIframeSessionContinuousHintShown = false;
 
 type GlobalEventTarget = Pick<Window, 'addEventListener' | 'removeEventListener'>;
 
@@ -208,6 +212,24 @@ function readIframeSetupPayloadRaw(): string | null {
 		// ignore
 	}
 	return null;
+}
+
+function writeListeningEcho(listening: boolean): void {
+	const payload = JSON.stringify({ listening, t: Date.now() });
+	try {
+		void eda.sys_Storage.setExtensionUserConfig(IFRAME_LISTENING_ECHO_KEY, payload);
+	}
+	catch {
+		// ignore
+	}
+	try {
+		if (typeof sessionStorage !== 'undefined') {
+			sessionStorage.setItem(IFRAME_LISTENING_ECHO_KEY, payload);
+		}
+	}
+	catch {
+		// ignore
+	}
 }
 
 function showDebugEnabledToast(): void {
@@ -1707,39 +1729,6 @@ function extractLargestContourPolygon(maskPolygon: FillPolygon): IPCB_Polygon | 
 	return (maskPolygon as IPCB_Polygon);
 }
 
-function normalizePolygonTokenForSignature(token: unknown): string {
-	if (typeof token === 'number') {
-		return Number.isFinite(token) ? token.toFixed(3) : 'NaN';
-	}
-	return String(token);
-}
-
-function buildPolygonSignature(maskPolygon: FillPolygon): string {
-	const asComplex = maskPolygon as IPCB_ComplexPolygon;
-	if ('getSourceStrictComplex' in asComplex && typeof asComplex.getSourceStrictComplex === 'function') {
-		const strict = asComplex.getSourceStrictComplex();
-		if (Array.isArray(strict)) {
-			return strict
-				.map(src => Array.isArray(src)
-					? src.map(normalizePolygonTokenForSignature).join(',')
-					: normalizePolygonTokenForSignature(src))
-				.join('|');
-		}
-	}
-	if ('getSource' in maskPolygon && typeof maskPolygon.getSource === 'function') {
-		const src = maskPolygon.getSource();
-		if (Array.isArray(src)) {
-			if (src.length > 0 && Array.isArray(src[0])) {
-				return (src as PolygonSource[])
-					.map(s => s.map(normalizePolygonTokenForSignature).join(','))
-					.join('|');
-			}
-			return (src as PolygonSource).map(normalizePolygonTokenForSignature).join(',');
-		}
-	}
-	return '';
-}
-
 function normalizeValueForKey(value: unknown): string {
 	if (typeof value === 'number') {
 		return Number.isFinite(value) ? value.toFixed(6) : 'NaN';
@@ -1881,7 +1870,7 @@ async function processPads(
 	const te = (key: string) => eda.sys_I18n.text(key, undefined, undefined);
 	let created = 0;
 	const errors: string[] = [];
-	const createdSignatureSet = new Set<string>();
+	/** 仅同一次批处理内去重：禁止用语义几何签名跨条目判断（易与「删除后再生成」同形重叠误伤）。 */
 	const generatedKeySet = new Set<string>();
 
 	for (const pad of targetPads) {
@@ -1933,7 +1922,7 @@ async function processPads(
 			const useWholePadBBox = shapeNeedsWholePadBBox(shape) && !special?.length;
 			for (const smLayer of layers) {
 				const generationKey = buildGenerationUniqueKey(pad, shape, settings, smLayer);
-				if (generatedKeySet.has(generationKey) || processedGenerationKeySeen.has(generationKey)) {
+				if (generatedKeySet.has(generationKey)) {
 					continue;
 				}
 				const ipcMaskPoly = await buildExpandedMaskPolygon(pad, shape, settings.expMil, useWholePadBBox, settings.outputKind);
@@ -1945,10 +1934,6 @@ async function processPads(
 						expMil: settings.expMil,
 					});
 					errors.push(`${label}: invalid geometry`);
-					continue;
-				}
-				const signature = `${String(smLayer)}::${buildPolygonSignature(ipcMaskPoly)}`;
-				if (signature !== '' && (createdSignatureSet.has(signature) || createdSignatureSeen.has(signature))) {
 					continue;
 				}
 				const polygonForFill = settings.outputKind === 'solder_mask'
@@ -1981,11 +1966,6 @@ async function processPads(
 					if (await finalizeFillForSettings(fill, settings, layer)) {
 						created++;
 						generatedKeySet.add(generationKey);
-						processedGenerationKeySeen.add(generationKey);
-						if (signature !== '') {
-							createdSignatureSet.add(signature);
-							createdSignatureSeen.add(signature);
-						}
 					}
 					else {
 						errors.push(`${label}: ${te('SolderMaskExpFinalizeRegionFailed')}`);
@@ -2068,7 +2048,10 @@ function scheduleInteractiveProcess(mouseProps?: PcbMouseSelectProp[]): void {
 	}, SELECT_DEBOUNCE_MS);
 }
 
-function registerInteractiveMouseListener(t: (k: string, ...a: string[]) => string): void {
+function registerInteractiveMouseListener(
+	t: (k: string, ...a: string[]) => string,
+	options?: { skipHintToast?: boolean },
+): void {
 	eda.pcb_Event.removeEventListener(MOUSE_LISTENER_ID);
 	// 使用 'all' 再过滤 SELECTED：部分环境下仅注册 SELECTED 时回调不触发
 	eda.pcb_Event.addMouseEventListener(
@@ -2084,8 +2067,11 @@ function registerInteractiveMouseListener(t: (k: string, ...a: string[]) => stri
 			scheduleInteractiveProcess(normalizeMouseProps(props));
 		},
 	);
-	showPadExpToast(t('SolderMaskExpInteractiveHint'), ESYS_ToastMessageType.INFO, t);
+	if (!options?.skipHintToast) {
+		showPadExpToast(t('SolderMaskExpInteractiveHint'), ESYS_ToastMessageType.INFO, t);
+	}
 	registerInteractiveExitListeners(t);
+	writeListeningEcho(true);
 	// 应用后立即尝试当前选中（无需再等一次选中事件）
 	scheduleInteractiveProcess();
 }
@@ -2097,11 +2083,13 @@ function stopInteractiveMode(): void {
 	interactiveProcessing = false;
 	pendingInteractiveSelection = false;
 	pendingInteractiveMouseProps = undefined;
+	padExpIframeListeningRegistered = false;
 	recentPadParentIdByPadId.clear();
 	if (selectionDebounceTimer !== undefined) {
 		clearTimeout(selectionDebounceTimer);
 		selectionDebounceTimer = undefined;
 	}
+	writeListeningEcho(false);
 }
 
 async function promptExpansionMil(
@@ -2135,76 +2123,19 @@ async function promptExpansionMil(
 	}
 }
 
-async function waitForIframeClosed(sysIframe: { isIFrameAlreadyExist: (id: string) => Promise<boolean> }): Promise<void> {
-	const start = Date.now();
-	let loop = 0;
-	let everExisted = false;
-	for (;;) {
-		const exists = await sysIframe.isIFrameAlreadyExist(IFRAME_SETUP_ID);
-		if (exists) {
-			everExisted = true;
-		}
-		// 若曾经存在且现在不存在，说明窗口已关闭
-		if (everExisted && !exists) {
-			toastIframeSetupVerbose('检测到窗口已关闭 (从存在变为不存在)');
-			return;
-		}
-		// 兜底：若存储中已有有效结果（非取消），也认为已处理完毕，避免宿主检测异常导致卡死
-		const raw = readIframeSetupPayloadRaw();
-		if (raw) {
-			try {
-				const p = JSON.parse(raw) as Record<string, unknown>;
-				if (p && p.cancelled !== true && p.kind) {
-					toastIframeSetupVerbose('存储中已有有效结果，提前结束等待');
-					return;
-				}
-				if (p && p.cancelled === true) {
-					toastIframeSetupVerbose('存储中为取消标记，结束等待');
-					return;
-				}
-			}
-			catch {
-				// ignore
-			}
-		}
-		if (Date.now() - start > IFRAME_WAIT_MAX_MS) {
-			toastIframeSetupVerbose('等待窗口关闭超时（10分钟），强制继续');
-			return;
-		}
-		if (loop % 20 === 0) {
-			toastIframeSetupVerbose(`等待关闭中... loop=${loop} everExisted=${String(everExisted)} exists=${String(exists)}`);
-		}
-		loop++;
-		await new Promise<void>(resolve => setTimeout(resolve, IFRAME_CLOSE_POLL_MS));
-	}
-}
-
 interface PadExpansionSetupResult {
 	outputKind: PadExpansionOutputKind;
 	expMil: number;
 	continuous: boolean;
 }
 
-async function parseIframeSetupFromStorage(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
-	const raw = readIframeSetupPayloadRaw();
-	if (raw === null || raw === '') {
-		toastIframeSetupVerbose('解析：未读到 payload（extensionStorage 与 sessionStorage 均为空）');
-		return undefined;
-	}
-	toastIframeSetupVerbose(`解析：已读 payload 长度=${raw.length}`);
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw) as unknown;
-	}
-	catch (e) {
-		toastIframeSetupVerbose(`JSON 解析失败: ${errorMessage(e)}`);
-		return undefined;
-	}
-	if (!parsed || typeof parsed !== 'object') {
-		toastIframeSetupVerbose('解析：JSON 解析结果不是对象');
-		return undefined;
-	}
-	const p = parsed as Record<string, unknown>;
+/**
+ * 解析内联页写入的一条「应用」消息（非 stopInteractive）。
+ */
+async function parseApplyRecord(
+	p: Record<string, unknown>,
+	t: (k: string, ...a: string[]) => string,
+): Promise<PadExpansionSetupResult | undefined> {
 	if (p.cancelled === true) {
 		toastIframeSetupVerbose('解析：cancelled=true，退出');
 		return undefined;
@@ -2240,17 +2171,134 @@ async function parseIframeSetupFromStorage(t: (k: string, ...a: string[]) => str
 	};
 }
 
+async function runFallbackChainExecute(t: (k: string, ...a: string[]) => string): Promise<void> {
+	const setup = await padExpansionSetupFallbackAsync(t);
+	if (setup === undefined) {
+		return;
+	}
+	const settings: PadExpansionSettings = { outputKind: setup.outputKind, expMil: setup.expMil };
+	if (setup.continuous) {
+		activeInteractiveSettings = settings;
+		registerInteractiveMouseListener(t);
+		padExpIframeListeningRegistered = true;
+	}
+	else {
+		await runOneShotPadExpansion(t, settings);
+	}
+}
+
+/**
+ * 内联窗打开期间轮询存储：处理「生成」「停止」直至窗口关闭。
+ */
+async function runIframeSetupSessionLoop(
+	sysIframe: { isIFrameAlreadyExist: (id: string) => Promise<boolean> },
+	t: (k: string, ...a: string[]) => string,
+	initialEverVisible: boolean,
+): Promise<void> {
+	padExpIframeSessionContinuousHintShown = false;
+	let lastHandledApplySeq = 0;
+	let oneShotRunning = false;
+	let everIframeVisible = initialEverVisible;
+	const sessionT0 = Date.now();
+
+	for (;;) {
+		if (Date.now() - sessionT0 > IFRAME_WAIT_MAX_MS) {
+			toastIframeSetupVerbose('内联会话达到最大等待时间，结束');
+			break;
+		}
+		const exists = await sysIframe.isIFrameAlreadyExist(IFRAME_SETUP_ID);
+		if (exists) {
+			everIframeVisible = true;
+		}
+
+		const raw = readIframeSetupPayloadRaw();
+		if (raw) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(raw) as unknown;
+			}
+			catch (e) {
+				toastIframeSetupVerbose(`会话轮询：JSON 解析失败 ${errorMessage(e)}`);
+				clearIframeSetupPayload();
+				await sleepMs(IFRAME_SESSION_POLL_MS);
+				continue;
+			}
+			if (parsed && typeof parsed === 'object') {
+				const p = parsed as Record<string, unknown>;
+				if (p.command === 'stopInteractive') {
+					stopInteractiveMode();
+					clearIframeSetupPayload();
+					await sleepMs(IFRAME_SESSION_POLL_MS);
+					continue;
+				}
+				if (p.cancelled === true) {
+					stopInteractiveMode();
+					clearIframeSetupPayload();
+					await sleepMs(IFRAME_SESSION_POLL_MS);
+					continue;
+				}
+				const seq = p.seq;
+				if (typeof seq === 'number' && seq > lastHandledApplySeq && typeof p.kind === 'string') {
+					const result = await parseApplyRecord(p, t);
+					if (result) {
+						lastHandledApplySeq = seq;
+						clearIframeSetupPayload();
+						const settings: PadExpansionSettings = {
+							outputKind: result.outputKind,
+							expMil: result.expMil,
+						};
+						if (result.continuous) {
+							activeInteractiveSettings = settings;
+							if (!padExpIframeListeningRegistered) {
+								const skipHint = padExpIframeSessionContinuousHintShown;
+								registerInteractiveMouseListener(t, { skipHintToast: skipHint });
+								padExpIframeListeningRegistered = true;
+								if (!skipHint) {
+									padExpIframeSessionContinuousHintShown = true;
+								}
+							}
+						}
+						else if (!oneShotRunning) {
+							oneShotRunning = true;
+							try {
+								await runOneShotPadExpansion(t, settings);
+							}
+							finally {
+								oneShotRunning = false;
+							}
+						}
+					}
+					else {
+						clearIframeSetupPayload();
+					}
+				}
+			}
+		}
+
+		if (everIframeVisible && !exists) {
+			toastIframeSetupVerbose('内联设置窗口已关闭，结束会话');
+			break;
+		}
+
+		await sleepMs(IFRAME_SESSION_POLL_MS);
+	}
+
+	stopInteractiveMode();
+}
+
 /**
  * 内联设置页（`/iframe/` 目录 + {@link eda.sys_IFrame.openIFrame}）。
  * @see https://prodocs.lceda.cn/cn/api/guide/inline-frame.html
  * @see https://prodocs.lceda.cn/cn/api/reference/pro-api.sys_iframe.openiframe.html
  */
-async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
+async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => string): Promise<void> {
 	const sysIframe = eda.sys_IFrame;
 	if (!sysIframe || typeof sysIframe.openIFrame !== 'function') {
 		toastIframeSetupVerbose('sys_IFrame.openIFrame 不可用，走回退对话框');
-		return padExpansionSetupFallbackAsync(t);
+		await runFallbackChainExecute(t);
+		return;
 	}
+	writeListeningEcho(false);
 	clearIframeSetupPayload();
 	const iframeProps = {
 		title: t('SolderMaskExpSetupTitle'),
@@ -2290,7 +2338,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 		opened = await sysIframe.openIFrame(
 			IFRAME_HTML_PATH_PRIMARY,
 			420,
-			520,
+			620,
 			IFRAME_SETUP_ID,
 			iframeProps,
 		) as boolean | undefined;
@@ -2301,7 +2349,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 			opened = await sysIframe.openIFrame(
 				IFRAME_HTML_PATH_ALT,
 				420,
-				520,
+				620,
 				IFRAME_SETUP_ID,
 				iframeProps,
 			) as boolean | undefined;
@@ -2309,7 +2357,8 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 		catch (e2) {
 			padExpDebugLog('openIFrame-alt-throw', e2);
 			toastIframeSetupVerbose(`openIFrame 异常: ${errorMessage(e2)}`);
-			return padExpansionSetupFallbackAsync(t);
+			await runFallbackChainExecute(t);
+			return;
 		}
 	}
 	// 文档为 Promise<boolean>；部分宿主返回 undefined，勿用 Boolean(opened) 误判
@@ -2331,24 +2380,12 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 	if (!windowLikelyOpen) {
 		toastIframeSetupVerbose('openIFrame 返回 false 且 isIFrameAlreadyExist=false，判定为打开失败');
 		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpIframeOpenFailed'), t('SolderMaskExpTitle'));
-		return undefined;
+		return;
 	}
 	if (!exists) {
-		toastIframeSetupVerbose('警告：isIFrameAlreadyExist 始终为 false，但继续等待关闭（以存储内容为准）');
+		toastIframeSetupVerbose('警告：isIFrameAlreadyExist 始终为 false，但继续会话轮询（以存储与超时为准）');
 	}
-	await waitForIframeClosed(sysIframe);
-	toastIframeSetupVerbose('内联窗口已关闭，开始读取设置');
-	// 给予几次重试读取，避免 iframe 写入与主逻辑读取的竞态
-	let setup: PadExpansionSetupResult | undefined;
-	for (let readAttempt = 0; readAttempt < 10; readAttempt++) {
-		setup = await parseIframeSetupFromStorage(t);
-		if (setup !== undefined) {
-			break;
-		}
-		toastIframeSetupVerbose(`读取设置为空，重试 ${readAttempt + 1}/10...`);
-		await sleepMs(150);
-	}
-	return setup;
+	await runIframeSetupSessionLoop(sysIframe, t, exists);
 }
 
 async function padExpansionSetupFallbackAsync(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
@@ -2417,21 +2454,7 @@ export async function runPadSolderMaskExpansion(): Promise<void> {
 			eda.sys_Dialog.showConfirmationMessage(t('SolderMaskExpNeedPcb'), t('SolderMaskExpTitle'));
 			return;
 		}
-		const setup = await openPadExpansionSetupIframe(t);
-		if (setup === undefined) {
-			return;
-		}
-		toastIframeSetupVerbose(
-			`设置已应用: kind=${setup.outputKind} expMil=${setup.expMil.toFixed(4)} continuous=${String(setup.continuous)}`,
-		);
-		const settings: PadExpansionSettings = { outputKind: setup.outputKind, expMil: setup.expMil };
-		if (setup.continuous) {
-			activeInteractiveSettings = settings;
-			registerInteractiveMouseListener(t);
-		}
-		else {
-			await runOneShotPadExpansion(t, settings);
-		}
+		await openPadExpansionSetupIframe(t);
 	}
 	catch (err) {
 		eda.sys_Dialog.showConfirmationMessage(

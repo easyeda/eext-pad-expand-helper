@@ -1,4 +1,4 @@
-# 焊盘阻焊外扩助手（`pad-expand-helper`）
+# 焊盘外扩助手（英文界面 **`pad-expand-helper`**）
 
 在 **PCB 编辑器**中，按所选 **焊盘或器件** 批量生成 **阻焊外扩几何**：可输出为 **电气层上的禁止区域**（控制铺铜/填充），或 **仅阻焊层填充图形**。适用于需要按固定外扩量快速布置阻焊开窗与工艺禁区的场景。
 
@@ -12,9 +12,9 @@
 
 | 属性 | 值 |
 |------|-----|
-| name | `pad-solder-mask-guard` |
+| name | `pad-expand-helper` |
 | uuid | `23d6d62d80c44cc28c5c608ac3126f32` |
-| displayName | **`pad-expand-helper`**（中文界面一级菜单为「焊盘阻焊外扩助手」，与英文 **`pad-expand-helper`** / `pad-expand-helper: …` 对应） |
+| displayName | **焊盘外扩助手**（`locales/extensionJson/en.json` 一级菜单为 **`pad-expand-helper`**） |
 | version | 见 `extension.json` |
 | license | Apache-2.0 |
 | categories | PCB |
@@ -72,7 +72,7 @@
 
 1. 打开 **PCB** 设计文件。
 2. **单次模式**：在画布中先 **选中** 目标（焊盘、器件焊盘或器件）。
-3. 在顶部菜单栏找到 **`焊盘阻焊外扩助手`** → **`焊盘阻焊外扩…`**（英文为 **`pad-expand-helper`** → **`pad-expand-helper: expand…`**；内联设置页英文标题 **`pad-expand-helper: setup`**；以客户端显示为准）。
+3. 在顶部菜单栏找到 **`焊盘外扩助手`** → **`焊盘阻焊外扩…`**（英文为 **`pad-expand-helper`** → **`pad-expand-helper: expand…`**；内联设置页英文标题 **`pad-expand-helper: setup`**；以客户端显示为准）。
 4. 在设置窗口中完成：**生成类型**、**外扩宽度**、是否 **连续生成**。
 5. **连续模式**：进入后在画布上反复点选/框选即可生成；用 **Esc** 或 **右键** 退出连续模式。
 
@@ -80,7 +80,7 @@
 
 | 菜单项 | 作用 |
 |--------|------|
-| 焊盘阻焊外扩助手 / **pad-expand-helper**（一级，英文） | 分组入口 |
+| 焊盘外扩助手 / **pad-expand-helper**（一级；英文界面为拉丁名） | 分组入口 |
 | 焊盘阻焊外扩… / `pad-expand-helper: expand…` | 打开设置并执行生成（与 `extension.json` 子菜单 `pad-expand-helper: expand...` 对应） |
 | About... | 显示当前扩展版本号 |
 
@@ -101,7 +101,7 @@ npm run lint
 npm run build     # 编译并打包 .eext 到 build/dist
 ```
 
-构建完成后，在 `build/dist` 目录获取 **`pad-solder-mask-guard_v<version>.eext`**（由 `extension.json` 的 **`name`** 与 **`version`** 组成，与扩展商店标识一致；**不要**为「好听」单独改打包脚本里的文件名而保留错误的 `name`）。在客户端中安装该扩展包。
+构建完成后，在 `build/dist` 目录获取 **`pad-expand-helper_v<version>.eext`**（由 `extension.json` 的 **`name`** 与 **`version`** 组成，与扩展商店标识一致；**不要**为「好听」单独改打包脚本里的文件名而保留错误的 `name`）。在客户端中安装该扩展包。
 
 **入口文件**：`extension.json` 中 `entry` 为 `./dist/index`；发布前请务必执行 `npm run compile`（或 `npm run build`），保证 **`dist/index.js` 存在且与源码一致**。内联设置页位于 `iframe/`，需一并打入扩展包。
 

@@ -24,7 +24,7 @@
 	"SolderMaskExpApplyInteractiveBefore": "After applying, keep selecting in the PCB: click pads or box-select; selecting a component applies to all its pads.\nUnit: ${1}",
 	"SolderMaskExpApplyInteractiveMain": "Apply & keep selecting",
 	"SolderMaskExpApplyInteractiveCancel": "Cancel",
-	"SolderMaskExpInteractiveHint": "pad-expand-helper — continuous mode: click or box-select pads/components on the PCB canvas. Press Esc or right-click to exit; or open pad-expand-helper: expand... again to stop.",
+	"SolderMaskExpInteractiveHint": "pad-expand-helper — continuous mode: click or box-select pads/components on the PCB canvas. Click Stop generation in the setup window, press Esc or right-click, or close the setup window to exit.",
 	"SolderMaskExpToastDismiss": "Close",
 	"SolderMaskExpExitEsc": "Left continuous mode (Esc)",
 	"SolderMaskExpExitRightClick": "Left continuous mode (right-click)",

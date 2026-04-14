@@ -17,7 +17,7 @@ import { runPadSolderMaskExpansion } from './padSolderMaskExpansion';
 // eslint-disable-next-line unused-imports/no-unused-vars
 export function activate(status?: 'onStartupFinished', arg?: string): void {}
 
-/** pad-expand-helper：配置类型与外扩尺寸 → 连续点选/框选焊盘或器件，按焊盘生成禁止区域或阻焊层填充（折线拟合） */
+/** 焊盘外扩助手（英文 pad-expand-helper）：配置与外扩尺寸 → 连续点选/框选焊盘或器件，按焊盘生成禁止区域或阻焊层填充（折线拟合） */
 export function generatePadSolderMaskExpansion(): void {
 	runPadSolderMaskExpansion().catch((err: unknown) => {
 		const msg = err instanceof Error ? err.message : String(err);

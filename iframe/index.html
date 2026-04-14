@@ -9,172 +9,324 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<!-- 文档：对话框标题可来自 <title>；宿主亦支持 openIFrame 的 props.title -->
-		<title data-i18n="setupTitle">焊盘阻焊外扩助手：设置</title>
+		<title data-i18n="setupTitle">焊盘外扩设置</title>
 		<style>
+			:root {
+				--bg: linear-gradient(165deg, #eef2f9 0%, #e8ecf4 50%, #f4f6fa 100%);
+				--surface: #ffffff;
+				--text: #0f172a;
+				--text-muted: #64748b;
+				--border: #e2e8f0;
+				--border-strong: #cbd5e1;
+				--accent: #2563eb;
+				--accent-hover: #1d4ed8;
+				--accent-soft: rgba(37, 99, 235, 0.08);
+				--stop: #c2410c;
+				--stop-bg: #fff7ed;
+				--stop-border: #fdba74;
+				--radius: 10px;
+				--radius-sm: 7px;
+				--shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 12px rgba(15, 23, 42, 0.04);
+			}
 			* {
 				box-sizing: border-box;
 			}
+			html {
+				height: 100%;
+				overflow: hidden;
+			}
 			body {
 				margin: 0;
-				padding: 14px 16px 16px;
-				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+				height: 100%;
+				overflow: hidden;
+				font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 				font-size: 13px;
-				line-height: 1.45;
-				color: #1a1a1a;
-				background: #f6f7f9;
+				line-height: 1.5;
+				color: var(--text);
+				background: var(--bg);
+				-webkit-font-smoothing: antialiased;
 			}
-			h1 {
-				margin: 0 0 10px;
-				font-size: 15px;
-				font-weight: 600;
+			body.is-listening fieldset.card {
+				opacity: 0.88;
+				pointer-events: none;
+			}
+			.wrap {
+				padding: 12px 14px 14px;
+				max-width: 440px;
+				margin: 0 auto;
+			}
+			.header {
+				margin-bottom: 10px;
+			}
+			.header h1 {
+				margin: 0 0 8px;
+				font-size: 16px;
+				font-weight: 650;
+				letter-spacing: -0.02em;
+				color: var(--text);
 			}
 			.hint {
-				margin: 0 0 12px;
-				color: #555;
+				margin: 0;
+				color: var(--text-muted);
 				font-size: 12px;
+				line-height: 1.55;
 			}
-			fieldset {
-				margin: 0 0 12px;
-				padding: 10px 12px;
-				border: 1px solid #d8dce3;
-				border-radius: 8px;
-				background: #fff;
+			.main {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+			}
+			fieldset.card {
+				margin: 0;
+				padding: 12px 14px 14px;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				background: var(--surface);
+				box-shadow: var(--shadow);
+			}
+			fieldset.card:focus-within {
+				border-color: #bfdbfe;
+				box-shadow: var(--shadow), 0 0 0 3px var(--accent-soft);
 			}
 			legend {
-				padding: 0 6px;
-				font-weight: 600;
+				padding: 0 8px 0 2px;
+				font-weight: 650;
 				font-size: 12px;
+				letter-spacing: 0.02em;
+				color: var(--text-muted);
+			}
+			.radio-list {
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
 			}
 			.radio-row {
 				display: flex;
 				align-items: flex-start;
-				gap: 8px;
-				margin-bottom: 8px;
+				gap: 10px;
+				padding: 8px 10px;
+				border-radius: var(--radius-sm);
+				transition: background 0.15s ease;
 			}
-			.radio-row:last-child {
-				margin-bottom: 0;
+			.radio-row:hover {
+				background: #f8fafc;
 			}
 			.radio-row input {
-				margin-top: 2px;
+				margin-top: 3px;
+				width: 14px;
+				height: 14px;
+				accent-color: var(--accent);
+				cursor: pointer;
 			}
 			.radio-row label {
 				flex: 1;
 				cursor: pointer;
+				font-size: 13px;
+				line-height: 1.45;
 			}
 			.row {
-				margin-bottom: 10px;
-			}
-			.row:last-child {
 				margin-bottom: 0;
 			}
 			label.field {
 				display: block;
 				font-weight: 600;
-				margin-bottom: 4px;
+				margin-bottom: 6px;
 				font-size: 12px;
+				color: var(--text);
+			}
+			.input-wrap {
+				position: relative;
 			}
 			input[type='text'],
 			input[type='number'] {
 				width: 100%;
-				padding: 7px 10px;
-				border: 1px solid #c5cad3;
-				border-radius: 6px;
-				font-size: 13px;
+				padding: 9px 12px;
+				border: 1px solid var(--border-strong);
+				border-radius: var(--radius-sm);
+				font-size: 14px;
+				font-variant-numeric: tabular-nums;
+				background: #fafbfc;
+				transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+			}
+			input[type='text']:focus,
+			input[type='number']:focus {
+				outline: none;
+				border-color: var(--accent);
+				background: var(--surface);
+				box-shadow: 0 0 0 3px var(--accent-soft);
+			}
+			input[type='text']:disabled,
+			input[type='number']:disabled {
+				opacity: 0.65;
+				cursor: not-allowed;
+			}
+			.unit-pill {
+				display: inline-block;
+				margin-top: 8px;
+				padding: 3px 9px;
+				font-size: 11px;
+				font-weight: 600;
+				color: var(--accent);
+				background: var(--accent-soft);
+				border-radius: 999px;
+				letter-spacing: 0.02em;
 			}
 			.subhint {
-				margin-top: 4px;
+				margin-top: 8px;
 				font-size: 11px;
-				color: #666;
+				color: var(--text-muted);
+				line-height: 1.45;
 			}
 			.check-row {
 				display: flex;
-				align-items: center;
-				gap: 8px;
+				align-items: flex-start;
+				gap: 10px;
+				padding: 10px 12px;
+				border-radius: var(--radius-sm);
+				background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+				border: 1px solid var(--border);
 			}
 			.check-row input {
-				width: auto;
+				width: 16px;
+				height: 16px;
+				margin-top: 2px;
+				accent-color: var(--accent);
+				cursor: pointer;
 			}
 			.check-row label {
 				cursor: pointer;
-				font-weight: normal;
+				font-weight: 500;
+				font-size: 13px;
+				line-height: 1.45;
+				color: var(--text);
 			}
-			.actions {
+			.action-bar {
 				display: flex;
 				justify-content: flex-end;
+				align-items: center;
 				gap: 10px;
-				margin-top: 14px;
+				margin-top: 12px;
+				padding-top: 12px;
+				border-top: 1px solid var(--border);
 			}
 			button {
-				padding: 8px 18px;
-				border-radius: 6px;
+				padding: 9px 20px;
+				border-radius: var(--radius-sm);
 				font-size: 13px;
+				font-weight: 600;
 				cursor: pointer;
-				border: 1px solid #c5cad3;
-				background: #fff;
+				border: 1px solid var(--border-strong);
+				background: var(--surface);
+				color: var(--text);
+				transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.05s;
 			}
-			button.primary {
-				background: #2563eb;
-				border-color: #1d4ed8;
+			button:active:not(:disabled) {
+				transform: scale(0.98);
+			}
+			button:disabled {
+				opacity: 0.55;
+				cursor: not-allowed;
+			}
+			button.btn-ghost:hover:not(:disabled) {
+				background: #f8fafc;
+				border-color: #94a3b8;
+			}
+			button.btn-primary {
+				background: var(--accent);
+				border-color: var(--accent-hover);
 				color: #fff;
+				box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
 			}
-			button:hover {
-				opacity: 0.92;
+			button.btn-primary:hover:not(:disabled) {
+				background: var(--accent-hover);
+			}
+			button.btn-stop {
+				background: var(--stop-bg);
+				border-color: var(--stop-border);
+				color: var(--stop);
+				box-shadow: 0 1px 2px rgba(194, 65, 12, 0.12);
+			}
+			button.btn-stop:hover:not(:disabled) {
+				background: #ffedd5;
+				border-color: #fb923c;
+			}
+			button:focus-visible {
+				outline: none;
+				box-shadow: 0 0 0 3px var(--accent-soft);
+			}
+			button.btn-stop:focus-visible {
+				box-shadow: 0 0 0 3px rgba(251, 146, 60, 0.35);
 			}
 		</style>
 	</head>
 	<body>
-		<h1 data-i18n="setupHeading">焊盘阻焊外扩助手：设置</h1>
-		<p class="hint" data-i18n="setupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
+		<div class="wrap">
+			<header class="header">
+				<h1 data-i18n="setupHeading">焊盘外扩设置</h1>
+				<p class="hint" data-i18n="setupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
+			</header>
 
-		<fieldset>
-			<legend data-i18n="legendKind">生成类型</legend>
-			<div class="radio-row">
-				<input type="radio" name="kind" id="k_pour" value="forbidden_pour" checked />
-				<label for="k_pour" data-i18n="kindForbiddenPour">禁止区域（禁止铺铜，默认）</label>
-			</div>
-			<div class="radio-row">
-				<input type="radio" name="kind" id="k_fill" value="forbidden_fill" />
-				<label for="k_fill" data-i18n="kindForbiddenFill">禁止区域（禁止填充）</label>
-			</div>
-			<div class="radio-row">
-				<input type="radio" name="kind" id="k_sm" value="solder_mask" />
-				<label for="k_sm" data-i18n="kindSolderMask">阻焊区域（仅阻焊层图形）</label>
-			</div>
-		</fieldset>
+			<main class="main">
+				<fieldset class="card">
+					<legend data-i18n="legendKind">生成类型</legend>
+					<div class="radio-list">
+						<div class="radio-row">
+							<input type="radio" name="kind" id="k_pour" value="forbidden_pour" checked />
+							<label for="k_pour" data-i18n="kindForbiddenPour">禁止区域（禁止铺铜，默认）</label>
+						</div>
+						<div class="radio-row">
+							<input type="radio" name="kind" id="k_fill" value="forbidden_fill" />
+							<label for="k_fill" data-i18n="kindForbiddenFill">禁止区域（禁止填充）</label>
+						</div>
+						<div class="radio-row">
+							<input type="radio" name="kind" id="k_sm" value="solder_mask" />
+							<label for="k_sm" data-i18n="kindSolderMask">阻焊区域（仅阻焊层图形）</label>
+						</div>
+					</div>
+				</fieldset>
 
-		<fieldset>
-			<legend data-i18n="legendWidth">外扩宽度</legend>
-			<div class="row">
-				<label class="field" for="expansion" data-i18n="labelWidth">单边外扩（相对焊盘外形）</label>
-				<input type="text" id="expansion" inputmode="decimal" autocomplete="off" value="10" />
-				<div class="subhint" id="widthUnitHint"></div>
-				<div class="subhint" data-i18n="widthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
-			</div>
-		</fieldset>
+				<fieldset class="card">
+					<legend data-i18n="legendWidth">外扩宽度</legend>
+					<div class="row">
+						<label class="field" for="expansion" data-i18n="labelWidth">单边外扩（相对焊盘外形）</label>
+						<div class="input-wrap">
+							<input type="text" id="expansion" inputmode="decimal" autocomplete="off" value="10" spellcheck="false" />
+						</div>
+						<div class="unit-pill" id="widthUnitHint"></div>
+						<div class="subhint" data-i18n="widthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
+					</div>
+				</fieldset>
 
-		<fieldset>
-			<legend data-i18n="legendMode">生成模式</legend>
-			<div class="check-row">
-				<input type="checkbox" id="continuous" />
-				<label for="continuous" data-i18n="labelContinuous">启用连续生成模式（在画布上持续点选/框选）</label>
-			</div>
-		</fieldset>
+				<fieldset class="card">
+					<legend data-i18n="legendMode">生成模式</legend>
+					<div class="check-row">
+						<input type="checkbox" id="continuous" />
+						<label for="continuous" data-i18n="labelContinuous">启用连续生成模式（在画布上持续点选/框选）</label>
+					</div>
+				</fieldset>
+			</main>
 
-		<div class="actions">
-			<button type="button" id="btnCancel" data-i18n="btnCancel">取消</button>
-			<button type="button" id="btnOk" class="primary" data-i18n="btnOk">生成</button>
+			<footer class="action-bar">
+				<button type="button" class="btn-ghost" id="btnCancel" data-i18n="btnCancel">取消</button>
+				<button type="button" class="btn-primary" id="btnOk" data-i18n="btnGenerate">生成</button>
+			</footer>
 		</div>
 
 		<script>
 			(function () {
-				var STORAGE_KEY = 'pad-solder-mask-guard:iframe-setup';
+				var STORAGE_KEY = 'pad-expand-helper:iframe-setup';
+				var ECHO_KEY = 'pad-expand-helper:listening-echo';
 				var IFRAME_ID = 'pad-sm-guard-setup';
 				var MAX_MIL = 2000;
+				var applySeq = 0;
+				var continuousListeningUi = false;
+				var echoPollTimer = null;
+				var echoPollStartTs = 0;
 
 				var translations = {
 					'zh-Hans': {
-						setupTitle: '焊盘阻焊外扩助手：设置',
-						setupHeading: '焊盘阻焊外扩助手：设置',
+						setupTitle: '焊盘外扩设置',
+						setupHeading: '焊盘外扩设置',
 						setupKindHint: '禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。',
 						legendKind: '生成类型',
 						kindForbiddenPour: '禁止区域（禁止铺铜，默认）',
@@ -187,7 +339,8 @@
 						legendMode: '生成模式',
 						labelContinuous: '启用连续生成模式（在画布上持续点选/框选）',
 						btnCancel: '取消',
-						btnOk: '生成',
+						btnGenerate: '生成',
+						btnStop: '停止生成',
 						errInvalid: '请输入有效的外扩数值。',
 						errPositive: '请输入大于 0 的外扩值。',
 						errLarge: '输入过大，请输入小于等于 2000 mil 的值。',
@@ -208,7 +361,8 @@
 						legendMode: 'Mode',
 						labelContinuous: 'Continuous mode (click / box-select on canvas)',
 						btnCancel: 'Cancel',
-						btnOk: 'Generate',
+						btnGenerate: 'Generate',
+						btnStop: 'Stop generation',
 						errInvalid: 'Enter a valid number.',
 						errPositive: 'Enter a value greater than 0.',
 						errLarge: 'Value too large (max 2000 mil).',
@@ -344,34 +498,138 @@
 					} catch (e) {}
 				}
 
+				function setFormEditDisabled(disabled) {
+					document.querySelectorAll('input[name="kind"]').forEach(function (el) {
+						el.disabled = !!disabled;
+					});
+					document.getElementById('expansion').disabled = !!disabled;
+					document.getElementById('continuous').disabled = !!disabled;
+				}
+
+				function getDict() {
+					return translations[window.__padExpLang || 'zh-Hans'] || translations['zh-Hans'];
+				}
+
+				function refreshPrimaryLabel() {
+					var dict = getDict();
+					var btn = document.getElementById('btnOk');
+					btn.classList.remove('btn-primary', 'btn-stop');
+					if (continuousListeningUi) {
+						btn.textContent = dict.btnStop;
+						btn.classList.add('btn-stop');
+					} else {
+						btn.textContent = dict.btnGenerate;
+						btn.classList.add('btn-primary');
+					}
+				}
+
+				function stopEchoPoll() {
+					if (echoPollTimer) {
+						clearInterval(echoPollTimer);
+						echoPollTimer = null;
+					}
+				}
+
+				function readEchoPayload() {
+					try {
+						if (typeof eda === 'undefined' || !eda.sys_Storage || typeof eda.sys_Storage.getExtensionUserConfig !== 'function') {
+							return null;
+						}
+						var v = eda.sys_Storage.getExtensionUserConfig(ECHO_KEY);
+						if (v === undefined || v === null) {
+							return null;
+						}
+						if (typeof v === 'object' && v !== null) {
+							return v;
+						}
+						if (typeof v === 'string') {
+							return JSON.parse(v);
+						}
+					} catch (e) {}
+					return null;
+				}
+
+				function startEchoPoll() {
+					stopEchoPoll();
+					echoPollStartTs = Date.now();
+					echoPollTimer = setInterval(function () {
+						if (!continuousListeningUi) {
+							stopEchoPoll();
+							return;
+						}
+						var o = readEchoPayload();
+						if (o && o.listening === false && typeof o.t === 'number' && o.t >= echoPollStartTs - 1000) {
+							setContinuousListeningUi(false);
+						}
+					}, 400);
+				}
+
+				function setContinuousListeningUi(on) {
+					continuousListeningUi = !!on;
+					document.body.classList.toggle('is-listening', continuousListeningUi);
+					setFormEditDisabled(continuousListeningUi);
+					refreshPrimaryLabel();
+					document.getElementById('btnCancel').disabled = false;
+					if (continuousListeningUi) {
+						startEchoPoll();
+					} else {
+						stopEchoPoll();
+					}
+				}
+
 				function onCancel() {
+					stopEchoPoll();
 					writeResultAsync({ cancelled: true }).finally(function () {
 						closeFrameAsync();
 					});
 				}
 
-				function onOk() {
-					var dict = translations[window.__padExpLang || 'zh-Hans'] || translations['zh-Hans'];
+				function onStopListening() {
+					writeResultAsync({ command: 'stopInteractive' })
+						.catch(function (err) {
+							toastIframeError('停止失败: ' + String(err && err.message ? err.message : err));
+						})
+						.finally(function () {
+							setContinuousListeningUi(false);
+						});
+				}
+
+				function onPrimaryClick() {
+					if (continuousListeningUi) {
+						onStopListening();
+					} else {
+						submitApply();
+					}
+				}
+
+				function submitApply() {
+					var dict = getDict();
 					if (!validateExpansion(dict)) {
 						return;
 					}
 					var kind = (document.querySelector('input[name="kind"]:checked') || {}).value || 'forbidden_pour';
 					var expansionInput = document.getElementById('expansion').value.trim();
 					var continuous = document.getElementById('continuous').checked;
+					applySeq += 1;
 					var payload = {
 						cancelled: false,
 						kind: kind,
 						expansionInput: expansionInput,
 						continuous: continuous,
+						seq: applySeq,
 					};
 					document.getElementById('btnOk').disabled = true;
 					document.getElementById('btnCancel').disabled = true;
 					writeResultAsync(payload)
 						.then(function () {
-							return closeFrameAsync();
+							document.getElementById('btnOk').disabled = false;
+							document.getElementById('btnCancel').disabled = false;
+							if (continuous) {
+								setContinuousListeningUi(true);
+							}
 						})
 						.catch(function (err) {
-							toastIframeError('写入/关闭失败: ' + String(err && err.message ? err.message : err));
+							toastIframeError('写入失败: ' + String(err && err.message ? err.message : err));
 							document.getElementById('btnOk').disabled = false;
 							document.getElementById('btnCancel').disabled = false;
 						});
@@ -395,7 +653,7 @@
 						document.getElementById('widthUnitHint').textContent = dict.widthUnitSuffix + label;
 					});
 					document.getElementById('btnCancel').addEventListener('click', onCancel);
-					document.getElementById('btnOk').addEventListener('click', onOk);
+					document.getElementById('btnOk').addEventListener('click', onPrimaryClick);
 				}
 
 				if (document.readyState === 'loading') {
