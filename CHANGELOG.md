@@ -1,6 +1,13 @@
 # 更新日志
 
-本文件记录 **焊盘外扩助手**（`pad-solder-mask-guard`）的版本变更。
+本文件记录 **焊盘阻焊外扩助手**（扩展标识 `pad-solder-mask-guard`；`extension.json` 展示名 **`pad-expand-helper`**）的版本变更。
+
+## 1.0.4
+
+### 命名与国际化
+
+- **扩展展示名**：`extension.json` 的 `displayName` 设为 **`pad-expand-helper`**（与英文菜单源串一致）。
+- **中文文案**：一级菜单与对话框标题等由「焊盘外扩助手」统一为「焊盘阻焊外扩助手」，与子命令「焊盘阻焊外扩…」及阻焊外扩语义一致；设置页中文版题为「焊盘阻焊外扩助手：设置」。
 
 ## 1.0.3
 
@@ -20,6 +27,7 @@
 
 ### 其它
 
+- **菜单与国际化**：`headerMenus` 一级菜单英文源串为 **`pad-expand-helper`**（与 `locales/extensionJson` 键一致），中文为「焊盘外扩助手」；二级 **`pad-expand-helper: expand...`** 对应中文「焊盘阻焊外扩…」。设置页英文标题 **`pad-expand-helper: setup`**（`locales/en.json` `SolderMaskExpSetupTitle`、内联页 `iframe/index.html`）。
 - **吐司**：`showToastMessage` 的时长参数为 **秒**（勿误传毫秒）；主流程成功/警告/错误提示使用统一自动关闭时长（当前常量约 **6** 秒）。
 - **类型**：优化 `isCirclePadShape` 等类型守卫，消除联合类型相关 TypeScript 报错。
 - **资源**：扩展图标等资源更新；几何与 UI 辅助函数整理。

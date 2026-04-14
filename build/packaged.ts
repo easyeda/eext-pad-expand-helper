@@ -87,6 +87,7 @@ function main() {
 		zip.file(file, fs.createReadStream(path.join(__dirname, '../', file)));
 	}
 
+	// 输出名：{extension.json.name}_v{version}.eext —— name 为商店/唯一标识，勿与 displayName 混用或随意改名
 	zip.generateNodeStream({ type: 'nodebuffer', streamFiles: true, compression: 'DEFLATE', compressionOptions: { level: 9 } }).pipe(
 		fs.createWriteStream(path.join(__dirname, 'dist', `${extensionConfig.name}_v${extensionConfig.version}.eext`)),
 	);

@@ -9,7 +9,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<!-- 文档：对话框标题可来自 <title>；宿主亦支持 openIFrame 的 props.title -->
-		<title data-i18n="setupTitle">焊盘外扩设置</title>
+		<title data-i18n="setupTitle">焊盘阻焊外扩助手：设置</title>
 		<style>
 			* {
 				box-sizing: border-box;
@@ -123,7 +123,7 @@
 		</style>
 	</head>
 	<body>
-		<h1 data-i18n="setupHeading">焊盘外扩设置</h1>
+		<h1 data-i18n="setupHeading">焊盘阻焊外扩助手：设置</h1>
 		<p class="hint" data-i18n="setupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
 
 		<fieldset>
@@ -146,7 +146,7 @@
 			<legend data-i18n="legendWidth">外扩宽度</legend>
 			<div class="row">
 				<label class="field" for="expansion" data-i18n="labelWidth">单边外扩（相对焊盘外形）</label>
-				<input type="text" id="expansion" inputmode="decimal" autocomplete="off" />
+				<input type="text" id="expansion" inputmode="decimal" autocomplete="off" value="10" />
 				<div class="subhint" id="widthUnitHint"></div>
 				<div class="subhint" data-i18n="widthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
 			</div>
@@ -173,8 +173,8 @@
 
 				var translations = {
 					'zh-Hans': {
-						setupTitle: '焊盘外扩设置',
-						setupHeading: '焊盘外扩设置',
+						setupTitle: '焊盘阻焊外扩助手：设置',
+						setupHeading: '焊盘阻焊外扩助手：设置',
 						setupKindHint: '禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。',
 						legendKind: '生成类型',
 						kindForbiddenPour: '禁止区域（禁止铺铜，默认）',
@@ -193,8 +193,8 @@
 						errLarge: '输入过大，请输入小于等于 2000 mil 的值。',
 					},
 					en: {
-						setupTitle: 'Pad expansion',
-						setupHeading: 'Pad expansion',
+						setupTitle: 'pad-expand-helper: setup',
+						setupHeading: 'pad-expand-helper: setup',
 						setupKindHint:
 							'Forbidden regions become copper-layer region rules; solder-mask output keeps fills on solder-mask layers only.',
 						legendKind: 'Output type',
@@ -339,7 +339,7 @@
 					try {
 						if (typeof eda !== 'undefined' && eda.sys_Message && typeof eda.sys_Message.showToastMessage === 'function') {
 							var info = typeof ESYS_ToastMessageType !== 'undefined' ? ESYS_ToastMessageType.INFO : 0;
-							eda.sys_Message.showToastMessage('[PadExp·iframe] ' + msg, info, 6);
+							eda.sys_Message.showToastMessage('[pad-expand-helper·iframe] ' + msg, info, 6);
 						}
 					} catch (e) {}
 				}

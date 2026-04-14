@@ -1,5 +1,5 @@
 /**
- * 焊盘外扩：折线拟合几何；禁止区域或阻焊填充；PCB_Event 连续选中生成。
+ * pad-expand-helper（焊盘外扩）：折线拟合几何；禁止区域或阻焊填充；PCB_Event 连续选中生成。
  */
 
 import * as extensionConfig from '../extension.json';
@@ -111,7 +111,7 @@ function padExpDebugLog(message: string, payload?: unknown): void {
 		}
 	};
 	if (payload === undefined) {
-		const line = `[PadExpDebug] ${message}`;
+		const line = `[pad-expand-helper·dbg] ${message}`;
 		writeConsole(line);
 		writeEdaLog(line);
 		return;
@@ -123,7 +123,7 @@ function padExpDebugLog(message: string, payload?: unknown): void {
 	catch {
 		text = String(payload);
 	}
-	const line = `[PadExpDebug] ${message}: ${text}`;
+	const line = `[pad-expand-helper·dbg] ${message}: ${text}`;
 	writeConsole(line);
 	writeEdaLog(line);
 }
@@ -140,7 +140,7 @@ function padExpDebugToast(message: string): void {
 	}
 	lastDebugToastAt = now;
 	debugToastSeq += 1;
-	eda.sys_Message.showToastMessage(`[PadExpDebug ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 2);
+	eda.sys_Message.showToastMessage(`[pad-expand-helper·dbg ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 2);
 }
 
 function padExpDebugToastForce(message: string): void {
@@ -148,7 +148,7 @@ function padExpDebugToastForce(message: string): void {
 		return;
 	}
 	debugToastSeq += 1;
-	eda.sys_Message.showToastMessage(`[PadExpDebug ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 3);
+	eda.sys_Message.showToastMessage(`[pad-expand-helper·dbg ${debugToastSeq}] ${message}`, ESYS_ToastMessageType.INFO, 3);
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -160,7 +160,7 @@ function toastIframeSetupVerbose(message: string): void {
 	if (!PAD_IFRAME_SETUP_VERBOSE) {
 		return;
 	}
-	const text = `[PadExp·Setup] ${message}`;
+	const text = `[pad-expand-helper·setup] ${message}`;
 	eda.sys_Message.showToastMessage(text.length > 900 ? `${text.slice(0, 897)}…` : text, ESYS_ToastMessageType.INFO, 8);
 }
 
@@ -216,7 +216,7 @@ function showDebugEnabledToast(): void {
 	}
 	debugToastSeq = 0;
 	lastDebugToastAt = 0;
-	eda.sys_Message.showToastMessage('[PadExpDebug] Debug logging enabled', ESYS_ToastMessageType.INFO, 3);
+	eda.sys_Message.showToastMessage('[pad-expand-helper·dbg] Debug logging enabled', ESYS_ToastMessageType.INFO, 3);
 }
 
 /** 吐司：约 20s 自动关闭（timer 为秒）。勿传「关闭」按钮与空回调：空字符串会导致按钮无效。 */
@@ -1813,7 +1813,7 @@ async function finalizeFillForSettings(
 
 function showInputDialogAsync(before: string, after: string, title: string): Promise<string | undefined> {
 	return new Promise((resolve) => {
-		eda.sys_Dialog.showInputDialog(before, after, title, 'number', '', { placeholder: '0', step: 0.000_001 }, resolve);
+		eda.sys_Dialog.showInputDialog(before, after, title, 'number', '10', { placeholder: '10', step: 0.000_001 }, resolve);
 	});
 }
 
@@ -2185,13 +2185,10 @@ interface PadExpansionSetupResult {
 	continuous: boolean;
 }
 
-async function parseIframeSetupFromStorage(t: (k: string, ...a: string[]) => string, silent = false): Promise<PadExpansionSetupResult | undefined> {
+async function parseIframeSetupFromStorage(t: (k: string, ...a: string[]) => string): Promise<PadExpansionSetupResult | undefined> {
 	const raw = readIframeSetupPayloadRaw();
 	if (raw === null || raw === '') {
 		toastIframeSetupVerbose('解析：未读到 payload（extensionStorage 与 sessionStorage 均为空）');
-		if (!silent) {
-			eda.sys_Dialog.showInformationMessage(t('SolderMaskExpSetupReadEmpty'), t('SolderMaskExpTitle'));
-		}
 		return undefined;
 	}
 	toastIframeSetupVerbose(`解析：已读 payload 长度=${raw.length}`);
@@ -2293,7 +2290,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 		opened = await sysIframe.openIFrame(
 			IFRAME_HTML_PATH_PRIMARY,
 			420,
-			460,
+			520,
 			IFRAME_SETUP_ID,
 			iframeProps,
 		) as boolean | undefined;
@@ -2304,7 +2301,7 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 			opened = await sysIframe.openIFrame(
 				IFRAME_HTML_PATH_ALT,
 				420,
-				460,
+				520,
 				IFRAME_SETUP_ID,
 				iframeProps,
 			) as boolean | undefined;
@@ -2344,15 +2341,12 @@ async function openPadExpansionSetupIframe(t: (k: string, ...a: string[]) => str
 	// 给予几次重试读取，避免 iframe 写入与主逻辑读取的竞态
 	let setup: PadExpansionSetupResult | undefined;
 	for (let readAttempt = 0; readAttempt < 10; readAttempt++) {
-		setup = await parseIframeSetupFromStorage(t, readAttempt < 9);
+		setup = await parseIframeSetupFromStorage(t);
 		if (setup !== undefined) {
 			break;
 		}
 		toastIframeSetupVerbose(`读取设置为空，重试 ${readAttempt + 1}/10...`);
 		await sleepMs(150);
-	}
-	if (setup === undefined) {
-		eda.sys_Dialog.showInformationMessage(t('SolderMaskExpSetupReadEmpty'), t('SolderMaskExpTitle'));
 	}
 	return setup;
 }

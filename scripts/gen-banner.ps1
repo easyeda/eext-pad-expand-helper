@@ -23,8 +23,8 @@ $rect1 = New-Object System.Drawing.RectangleF 0, 280, $w, 120
 $rect2 = New-Object System.Drawing.RectangleF 0, 420, $w, 80
 $titleBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 26, 40, 58))
 $subBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 80, 95, 112))
-$g.DrawString('Pad Solder Mask Expansion', $font, $titleBrush, $rect1, $sf)
-$g.DrawString('PCB solder mask guard / pad expansion tool', $font2, $subBrush, $rect2, $sf)
+$g.DrawString('pad-expand-helper', $font, $titleBrush, $rect1, $sf)
+$g.DrawString('pad-expand-helper · PCB extension', $font2, $subBrush, $rect2, $sf)
 $titleBrush.Dispose()
 $subBrush.Dispose()
 $font.Dispose()
