@@ -24,8 +24,7 @@
 		"pad-expand-helper"
 	],
 	"images": {
-		"logo": "./images/logo.png",
-		"banner": "./images/banner.jpg"
+		"logo": "./images/logo.png"
 	},
 	"homepage": "",
 	"bugs": "",
