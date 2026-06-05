@@ -1,5 +1,13 @@
 {
 	"pad-expand-helper": "pad-expand-helper",
 	"About...": "About...",
-	"pad-expand-helper: expand...": "pad-expand-helper: expand…"
+	"pad-expand-helper: expand...": "pad-expand-helper: expand...",
+	"焊盘外扩助手": "Pad Expand Helper",
+	"按焊盘生成阻焊外扩：禁止区域（禁止铺铜/填充）或阻焊层图形；支持连续点选与多选。英文菜单名 pad-expand-helper。": "Generate solder-mask expansion from pads: forbidden regions (no copper pour / no fills) or solder-mask-layer graphics; supports continuous click-select and multi-select.",
+	"阻焊层": "Solder Mask",
+	"焊盘": "Pad",
+	"禁止区域": "Forbidden Region",
+	"外扩": "Expansion",
+	"solder-mask": "solder-mask",
+	"助手": "Helper"
 }

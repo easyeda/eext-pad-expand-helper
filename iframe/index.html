@@ -9,7 +9,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<!-- 文档：对话框标题可来自 <title>；宿主亦支持 openIFrame 的 props.title -->
-		<title data-i18n="setupTitle">焊盘外扩设置</title>
+		<title data-i18n="iframeSetupTitle"></title>
 		<style>
 			:root {
 				--bg: linear-gradient(165deg, #eef2f9 0%, #e8ecf4 50%, #f4f6fa 100%);
@@ -264,53 +264,53 @@
 	<body>
 		<div class="wrap">
 			<header class="header">
-				<h1 data-i18n="setupHeading">焊盘外扩设置</h1>
-				<p class="hint" data-i18n="setupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
+				<h1 data-i18n="iframeSetupHeading"></h1>
+				<p class="hint" data-i18n="iframeSetupKindHint"></p>
 			</header>
 
 			<main class="main">
 				<fieldset class="card">
-					<legend data-i18n="legendKind">生成类型</legend>
+					<legend data-i18n="iframeLegendKind"></legend>
 					<div class="radio-list">
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_pour" value="forbidden_pour" checked />
-							<label for="k_pour" data-i18n="kindForbiddenPour">禁止区域（禁止铺铜，默认）</label>
+							<label for="k_pour" data-i18n="iframeKindForbiddenPour"></label>
 						</div>
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_fill" value="forbidden_fill" />
-							<label for="k_fill" data-i18n="kindForbiddenFill">禁止区域（禁止填充）</label>
+							<label for="k_fill" data-i18n="iframeKindForbiddenFill"></label>
 						</div>
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_sm" value="solder_mask" />
-							<label for="k_sm" data-i18n="kindSolderMask">阻焊区域（仅阻焊层图形）</label>
+							<label for="k_sm" data-i18n="iframeKindSolderMask"></label>
 						</div>
 					</div>
 				</fieldset>
 
 				<fieldset class="card">
-					<legend data-i18n="legendWidth">外扩宽度</legend>
+					<legend data-i18n="iframeLegendWidth"></legend>
 					<div class="row">
-						<label class="field" for="expansion" data-i18n="labelWidth">单边外扩（相对焊盘外形）</label>
+						<label class="field" for="expansion" data-i18n="iframeLabelWidth"></label>
 						<div class="input-wrap">
 							<input type="text" id="expansion" inputmode="decimal" autocomplete="off" value="10" spellcheck="false" />
 						</div>
 						<div class="unit-pill" id="widthUnitHint"></div>
-						<div class="subhint" data-i18n="widthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
+						<div class="subhint" data-i18n="iframeWidthSubhint"></div>
 					</div>
 				</fieldset>
 
 				<fieldset class="card">
-					<legend data-i18n="legendMode">生成模式</legend>
+					<legend data-i18n="iframeLegendMode"></legend>
 					<div class="check-row">
 						<input type="checkbox" id="continuous" />
-						<label for="continuous" data-i18n="labelContinuous">启用连续生成模式（在画布上持续点选/框选）</label>
+						<label for="continuous" data-i18n="iframeLabelContinuous"></label>
 					</div>
 				</fieldset>
 			</main>
 
 			<footer class="action-bar">
-				<button type="button" class="btn-ghost" id="btnCancel" data-i18n="btnCancel">取消</button>
-				<button type="button" class="btn-primary" id="btnOk" data-i18n="btnGenerate">生成</button>
+				<button type="button" class="btn-ghost" id="btnCancel" data-i18n="iframeBtnCancel"></button>
+				<button type="button" class="btn-primary" id="btnOk" data-i18n="iframeBtnGenerate"></button>
 			</footer>
 		</div>
 
@@ -325,84 +325,24 @@
 				var echoPollTimer = null;
 				var echoPollStartTs = 0;
 
-				var translations = {
-					'zh-Hans': {
-						setupTitle: '焊盘外扩设置',
-						setupHeading: '焊盘外扩设置',
-						setupKindHint: '禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。',
-						legendKind: '生成类型',
-						kindForbiddenPour: '禁止区域（禁止铺铜，默认）',
-						kindForbiddenFill: '禁止区域（禁止填充）',
-						kindSolderMask: '阻焊区域（仅阻焊层图形）',
-						legendWidth: '外扩宽度',
-						labelWidth: '单边外扩（相对焊盘外形）',
-						widthSubhint: '数值将换算为 PCB 内部 mil 后生成几何。',
-						widthUnitSuffix: '当前单位：',
-						legendMode: '生成模式',
-						labelContinuous: '启用连续生成模式（在画布上持续点选/框选）',
-						btnCancel: '取消',
-						btnGenerate: '生成',
-						btnStop: '停止生成',
-						errInvalid: '请输入有效的外扩数值。',
-						errPositive: '请输入大于 0 的外扩值。',
-						errLarge: '输入过大，请输入小于等于 2000 mil 的值。',
-					},
-					en: {
-						setupTitle: 'pad-expand-helper: setup',
-						setupHeading: 'pad-expand-helper: setup',
-						setupKindHint:
-							'Forbidden regions become copper-layer region rules; solder-mask output keeps fills on solder-mask layers only.',
-						legendKind: 'Output type',
-						kindForbiddenPour: 'Forbidden region (no copper pour, default)',
-						kindForbiddenFill: 'Forbidden region (no fills)',
-						kindSolderMask: 'Solder mask only (fills on solder-mask layers)',
-						legendWidth: 'Expansion',
-						labelWidth: 'Single-side offset from pad outline',
-						widthSubhint: 'Values are converted to PCB mils before geometry.',
-						widthUnitSuffix: 'Unit: ',
-						legendMode: 'Mode',
-						labelContinuous: 'Continuous mode (click / box-select on canvas)',
-						btnCancel: 'Cancel',
-						btnGenerate: 'Generate',
-						btnStop: 'Stop generation',
-						errInvalid: 'Enter a valid number.',
-						errPositive: 'Enter a value greater than 0.',
-						errLarge: 'Value too large (max 2000 mil).',
-					},
-				};
-
-				function resolveLang(callback) {
-					var fallback = 'zh-Hans';
-					try {
-						if (typeof eda !== 'undefined' && eda.sys_I18n && typeof eda.sys_I18n.getCurrentLanguage === 'function') {
-							var r = eda.sys_I18n.getCurrentLanguage();
-							if (r && typeof r.then === 'function') {
-								r.then(function (l) {
-									callback(l || fallback);
-								}).catch(function () {
-									callback(fallback);
-								});
-								return;
-							}
-							callback(r || fallback);
-							return;
-						}
-					} catch (e) {}
-					callback(fallback);
+				var edaObj = (typeof eda !== 'undefined') ? eda : (window.parent && window.parent.eda);
+				function t(tag) {
+					if (edaObj && edaObj.sys_I18n) {
+						var args = [tag, undefined, undefined];
+						for (var i = 1; i < arguments.length; i++) args.push(arguments[i]);
+						return edaObj.sys_I18n.text.apply(edaObj.sys_I18n, args);
+					}
+					return tag;
 				}
 
-				function applyI18n(lang) {
-					var dict = translations[lang] || translations['zh-Hans'];
+				function applyI18n() {
 					document.querySelectorAll('[data-i18n]').forEach(function (el) {
 						var k = el.getAttribute('data-i18n');
-						if (k && dict[k]) {
-							el.textContent = dict[k];
+						if (k) {
+							el.textContent = t(k);
 						}
 					});
-					if (dict.setupTitle) {
-						document.title = dict.setupTitle;
-					}
-					return dict;
+					document.title = t('iframeSetupTitle');
 				}
 
 				function defaultExpansionInputByUnit(unit) {
@@ -437,20 +377,20 @@
 					return sys.mmToMil(n, 6);
 				}
 
-				function validateExpansion(dict) {
+				function validateExpansion() {
 					var raw = document.getElementById('expansion').value;
 					var unit = window.__padExpUnit;
 					var mil = convertToMil(raw, unit);
 					if (mil === null) {
-						alert(dict.errInvalid);
+						alert(t('iframeErrInvalid'));
 						return false;
 					}
 					if (mil <= 0) {
-						alert(dict.errPositive);
+						alert(t('iframeErrPositive'));
 						return false;
 					}
 					if (mil > MAX_MIL) {
-						alert(dict.errLarge);
+						alert(t('iframeErrLarge'));
 						return false;
 					}
 					return true;
@@ -512,19 +452,14 @@
 					document.getElementById('continuous').disabled = !!disabled;
 				}
 
-				function getDict() {
-					return translations[window.__padExpLang || 'zh-Hans'] || translations['zh-Hans'];
-				}
-
 				function refreshPrimaryLabel() {
-					var dict = getDict();
 					var btn = document.getElementById('btnOk');
 					btn.classList.remove('btn-primary', 'btn-stop');
 					if (continuousListeningUi) {
-						btn.textContent = dict.btnStop;
+						btn.textContent = t('iframeBtnStop');
 						btn.classList.add('btn-stop');
 					} else {
-						btn.textContent = dict.btnGenerate;
+						btn.textContent = t('iframeBtnGenerate');
 						btn.classList.add('btn-primary');
 					}
 				}
@@ -593,7 +528,7 @@
 				function onStopListening() {
 					writeResultAsync({ command: 'stopInteractive' })
 						.catch(function (err) {
-							toastIframeError('停止失败: ' + String(err && err.message ? err.message : err));
+							toastIframeError(t('iframeStopFail', String(err && err.message ? err.message : err)));
 						})
 						.finally(function () {
 							setContinuousListeningUi(false);
@@ -609,8 +544,7 @@
 				}
 
 				function submitApply() {
-					var dict = getDict();
-					if (!validateExpansion(dict)) {
+					if (!validateExpansion()) {
 						return;
 					}
 					var kind = (document.querySelector('input[name="kind"]:checked') || {}).value || 'forbidden_pour';
@@ -635,28 +569,24 @@
 							}
 						})
 						.catch(function (err) {
-							toastIframeError('写入失败: ' + String(err && err.message ? err.message : err));
+							toastIframeError(t('iframeWriteFail', String(err && err.message ? err.message : err)));
 							document.getElementById('btnOk').disabled = false;
 							document.getElementById('btnCancel').disabled = false;
 						});
 				}
 
 				function boot() {
-					resolveLang(function (lang) {
-						window.__padExpLang = lang || 'zh-Hans';
-						applyI18n(window.__padExpLang);
-						finishBoot(window.__padExpLang);
-					});
+					applyI18n();
+					finishBoot();
 				}
 
-				function finishBoot(lang) {
+				function finishBoot() {
 					eda.sys_Unit.getFrontendDataUnit().then(function (unit) {
 						window.__padExpUnit = unit;
 						var u = unit || 'mm';
 						var map = { mm: 'mm', mil: 'mil', inch: 'inch', in: 'in', cm: 'cm', dm: 'dm', m: 'm' };
 						var label = map[u] || String(u);
-						var dict = translations[lang] || translations['zh-Hans'];
-						document.getElementById('widthUnitHint').textContent = dict.widthUnitSuffix + label;
+						document.getElementById('widthUnitHint').textContent = t('iframeWidthUnitSuffix', label);
 						document.getElementById('expansion').value = defaultExpansionInputByUnit(u);
 					});
 					document.getElementById('btnCancel').addEventListener('click', onCancel);
