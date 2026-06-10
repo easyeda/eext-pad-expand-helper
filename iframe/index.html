@@ -9,7 +9,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<!-- 文档：对话框标题可来自 <title>；宿主亦支持 openIFrame 的 props.title -->
-		<title data-i18n="iframeSetupTitle"></title>
+		<title data-i18n="iframeSetupTitle">焊盘外扩设置</title>
 		<style>
 			:root {
 				--bg: linear-gradient(165deg, #eef2f9 0%, #e8ecf4 50%, #f4f6fa 100%);
@@ -265,52 +265,52 @@
 		<div class="wrap">
 			<header class="header">
 				<h1 data-i18n="iframeSetupHeading"></h1>
-				<p class="hint" data-i18n="iframeSetupKindHint"></p>
+				<p class="hint" data-i18n="iframeSetupKindHint">禁止区域会转为电气层上的区域规则；阻焊区域仅在阻焊层保留填充图元。</p>
 			</header>
 
 			<main class="main">
 				<fieldset class="card">
-					<legend data-i18n="iframeLegendKind"></legend>
+					<legend data-i18n="iframeLegendKind">生成类型</legend>
 					<div class="radio-list">
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_pour" value="forbidden_pour" checked />
-							<label for="k_pour" data-i18n="iframeKindForbiddenPour"></label>
+							<label for="k_pour" data-i18n="iframeKindForbiddenPour">禁止区域（禁止铺铜，默认）</label>
 						</div>
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_fill" value="forbidden_fill" />
-							<label for="k_fill" data-i18n="iframeKindForbiddenFill"></label>
+							<label for="k_fill" data-i18n="iframeKindForbiddenFill">禁止区域（禁止填充）</label>
 						</div>
 						<div class="radio-row">
 							<input type="radio" name="kind" id="k_sm" value="solder_mask" />
-							<label for="k_sm" data-i18n="iframeKindSolderMask"></label>
+							<label for="k_sm" data-i18n="iframeKindSolderMask">阻焊区域（仅阻焊层图形）</label>
 						</div>
 					</div>
 				</fieldset>
 
 				<fieldset class="card">
-					<legend data-i18n="iframeLegendWidth"></legend>
+					<legend data-i18n="iframeLegendWidth">外扩宽度</legend>
 					<div class="row">
-						<label class="field" for="expansion" data-i18n="iframeLabelWidth"></label>
+						<label class="field" for="expansion" data-i18n="iframeLabelWidth">单边外扩（相对焊盘外形）</label>
 						<div class="input-wrap">
 							<input type="text" id="expansion" inputmode="decimal" autocomplete="off" value="10" spellcheck="false" />
 						</div>
 						<div class="unit-pill" id="widthUnitHint"></div>
-						<div class="subhint" data-i18n="iframeWidthSubhint"></div>
+						<div class="subhint" data-i18n="iframeWidthSubhint">数值将换算为 PCB 内部 mil 后生成几何。</div>
 					</div>
 				</fieldset>
 
 				<fieldset class="card">
-					<legend data-i18n="iframeLegendMode"></legend>
+					<legend data-i18n="iframeLegendMode">生成模式</legend>
 					<div class="check-row">
 						<input type="checkbox" id="continuous" />
-						<label for="continuous" data-i18n="iframeLabelContinuous"></label>
+						<label for="continuous" data-i18n="iframeLabelContinuous">启用连续生成模式（在画布上持续点选/框选）</label>
 					</div>
 				</fieldset>
 			</main>
 
 			<footer class="action-bar">
-				<button type="button" class="btn-ghost" id="btnCancel" data-i18n="iframeBtnCancel"></button>
-				<button type="button" class="btn-primary" id="btnOk" data-i18n="iframeBtnGenerate"></button>
+				<button type="button" class="btn-ghost" id="btnCancel" data-i18n="iframeBtnCancel">取消</button>
+				<button type="button" class="btn-primary" id="btnOk" data-i18n="iframeBtnGenerate">生成</button>
 			</footer>
 		</div>
 
